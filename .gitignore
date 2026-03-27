@@ -1,0 +1,24 @@
+# .gitignore
+
+# Secrets
+.env
+
+# Session audio output — keep out of source control
+recordings/
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp

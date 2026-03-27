@@ -1,0 +1,11 @@
+# config.yaml — User-editable, non-secret settings for the MLX AI Discord Recorder.
+# Secrets (DISCORD_TOKEN, GUILD_ID) go in .env — never in this file.
+
+# Directory where session folders and audio files are written.
+# Supports both relative (from the bot's working directory) and absolute paths.
+output_directory: ./recordings
+
+# Name of the text channel the bot uses for recording announcements.
+# The channel must already exist in your server.
+# Examples: "bot-commands", "general", "dnd-bot"
+announce_channel: "bot-commands"
