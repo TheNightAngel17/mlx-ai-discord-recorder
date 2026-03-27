@@ -71,15 +71,14 @@ async def main() -> None:
     @bot.event
     async def on_ready() -> None:
         logger.info("Logged in as %s (ID: %s)", bot.user, bot.user.id)
+        # load_extension is synchronous in py-cord 2.6; must be called after
+        # the bot is ready so guild_id is available on the bot instance
+        bot.load_extension("cogs.recorder")
         # Sync commands scoped to the configured guild — takes effect immediately
-        # (global command sync can take up to an hour to propagate)
         await bot.sync_commands(guild_ids=[guild_id])
         logger.info("Slash commands synced to guild %s", guild_id)
 
-    # load_extension is synchronous in py-cord 2.6
-    bot.load_extension("cogs.recorder")
     await bot.start(token)
-
 
 if __name__ == "__main__":
     asyncio.run(main())
