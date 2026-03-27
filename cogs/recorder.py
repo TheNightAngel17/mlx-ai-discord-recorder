@@ -123,7 +123,7 @@ class RecorderCog(commands.Cog):
             filepath = os.path.join(session_dir, f"{safe_name}.wav")
             with open(filepath, "wb") as f:
                 f.write(wav_bytes)
-            logger.info("Saved recording for %s → %s", user.name, filepath)
+            logger.info("Saved recording for %s -> %s", user.name, filepath)
 
         if self.voice_client and self.voice_client.is_connected():
             await self.voice_client.disconnect()
@@ -138,12 +138,12 @@ class RecorderCog(commands.Cog):
             if announce_ch:
                 if self._stop_auto:
                     await announce_ch.send(
-                        f"⏹️ Channel empty — recording automatically stopped. "
+                        f"Recording automatically stopped (channel empty). "
                         f"Files saved to `{rel_path}`"
                     )
                 else:
                     await announce_ch.send(
-                        f"⏹️ Recording stopped — files saved to `{rel_path}`"
+                        f"Recording stopped — files saved to `{rel_path}`"
                     )
 
         logger.info("Recording session finished: %s", session_name)
@@ -177,7 +177,7 @@ class RecorderCog(commands.Cog):
     ) -> None:
         if self.is_recording:
             await ctx.respond(
-                "❌ Already recording! Use `/mlx-ai record stop` first.",
+                "Already recording! Use `/mlx-ai record stop` first.",
                 ephemeral=True,
             )
             return
@@ -185,10 +185,10 @@ class RecorderCog(commands.Cog):
         try:
             vc: discord.VoiceClient = await voice_channel.connect()
         except discord.ClientException as exc:
-            await ctx.respond(f"❌ Failed to join voice channel: {exc}", ephemeral=True)
+            await ctx.respond(f"Failed to join voice channel: {exc}", ephemeral=True)
             return
         except discord.Forbidden:
-            await ctx.respond("❌ I don't have permission to join that voice channel.", ephemeral=True)
+            await ctx.respond("I don't have permission to join that voice channel.", ephemeral=True)
             return
 
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
@@ -215,21 +215,21 @@ class RecorderCog(commands.Cog):
         announce_ch = await self._get_announce_channel(ctx.guild)
         if announce_ch:
             await announce_ch.send(
-                f"🔴 Recording started in `{voice_channel.name}` — Session: `{folder_name}`"
+                f"Recording started in `{voice_channel.name}` — Session: `{folder_name}`"
             )
 
         await ctx.respond(
-            f"✅ Recording started in `{voice_channel.name}` — Session: `{folder_name}`",
+            f"Recording started in `{voice_channel.name}` — Session: `{folder_name}`",
             ephemeral=True,
         )
 
     @record.command(name="stop", description="Stop the current recording session")
     async def record_stop(self, ctx: discord.ApplicationContext) -> None:
         if not self.is_recording:
-            await ctx.respond("❌ No active recording session.", ephemeral=True)
+            await ctx.respond("No active recording session.", ephemeral=True)
             return
 
-        await ctx.respond("⏹️ Stopping recording…", ephemeral=True)
+        await ctx.respond("Stopping recording...", ephemeral=True)
         await self._stop_recording(ctx.guild)
 
     @record.command(
@@ -237,7 +237,7 @@ class RecorderCog(commands.Cog):
     )
     async def record_status(self, ctx: discord.ApplicationContext) -> None:
         if not self.is_recording:
-            await ctx.respond("ℹ️ No active recording session.", ephemeral=True)
+            await ctx.respond("No active recording session.", ephemeral=True)
             return
 
         assert self.start_time is not None
@@ -252,8 +252,8 @@ class RecorderCog(commands.Cog):
 
         await ctx.respond(
             (
-                "🔴 **Recording Active**\n"
-                f"Session: `{self.session_name}`\n"
+                "**Recording Active**\n"
+                f"Session: `\{self.session_name}`\n"
                 f"Voice Channel: `{self.recording_channel.name if self.recording_channel else 'unknown'}`\n"
                 f"Duration: `{elapsed_str}`\n"
                 f"Users being recorded: `{human_count}`"
@@ -279,7 +279,7 @@ class RecorderCog(commands.Cog):
             logger.info("%s joined mid-session — now recording them.", member.name)
             announce_ch = await self._get_announce_channel(member.guild)
             if announce_ch:
-                await announce_ch.send(f"🎙️ Now recording `{member.name}` who joined mid-session")
+                await announce_ch.send(f"Now recording `{member.name}` who joined mid-session")
 
         if (
             before.channel is not None
