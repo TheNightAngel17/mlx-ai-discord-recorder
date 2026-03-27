@@ -25,13 +25,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-
 def load_config() -> dict:
     """Load and return the contents of config.yaml."""
     config_path = os.path.join(os.path.dirname(__file__), "config.yaml")
     with open(config_path, "r") as f:
         return yaml.safe_load(f)
-
 
 async def main() -> None:
     load_dotenv()
@@ -78,7 +76,8 @@ async def main() -> None:
         await bot.sync_commands(guild_ids=[guild_id])
         logger.info("Slash commands synced to guild %s", guild_id)
 
-    await bot.load_extension("cogs.recorder")
+    # load_extension is synchronous in py-cord 2.6
+    bot.load_extension("cogs.recorder")
     await bot.start(token)
 
 
