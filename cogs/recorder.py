@@ -118,8 +118,7 @@ class RecorderCog(commands.Cog):
                 logger.warning("No audio captured for %s — skipping.", user.name)
                 continue
 
-            safe_name = re.sub(r"[^
-\w\-]", "_", user.name)
+            safe_name = re.sub(r"[^\w\-]", "_", user.name)
             filepath = os.path.join(session_dir, f"{safe_name}.wav")
             with open(filepath, "wb") as f:
                 f.write(wav_bytes)

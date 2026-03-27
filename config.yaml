@@ -3,7 +3,7 @@
 
 # Directory where session folders and audio files are written.
 # Supports both relative (from the bot's working directory) and absolute paths.
-output_directory: ./recordings
+output_directory: D:/mlx-ai-recordings
 
 # Name of the text channel the bot uses for recording announcements.
 # The channel must already exist in your server.
