@@ -67,15 +67,16 @@ async def main() -> None:
     bot.config = config       # type: ignore[attr-defined]
     bot.guild_id = guild_id   # type: ignore[attr-defined]
 
+    # load_extension is synchronous in py-cord 2.6 — do NOT await it
+    bot.load_extension("cogs.recorder")
+
     @bot.event
     async def on_ready() -> None:
         logger.info("Logged in as %s (ID: %s)", bot.user, bot.user.id)
         await bot.sync_commands(guild_ids=[guild_id])
         logger.info("Slash commands synced to guild %s", guild_id)
 
-    async with bot:
-        await bot.load_extension("cogs.recorder")
-        await bot.start(token)
+    await bot.start(token)
 
 if __name__ == "__main__":
     asyncio.run(main())
