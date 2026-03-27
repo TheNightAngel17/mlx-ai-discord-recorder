@@ -1,16 +1,46 @@
 # MLX AI Discord Recorder
 
-A Discord bot that joins a voice channel and records each participant's audio into a separate `.wav` file per session. The recordings can then be fed into a speech-to-text pipeline (such as [Whisper](https://github.com/openai/whisper)) to generate session transcripts, which can be vectorised and queried via a self-hosted RAG system — perfect for archiving D&D sessions.
+A Discord bot that joins a voice channel, records the session as a single mixed audio file, and automatically transcribes it with [WhisperX](https://github.com/m-bain/whisperX) — producing per-speaker transcripts with word-level timestamps. Perfect for archiving D&D sessions and feeding them into a self-hosted RAG pipeline.
+
+---
+
+## Pipeline
+
+```
+/mlx-ai record start
+        │
+        ▼
+Bot joins voice channel
+Records all audio → mixed.wav
+Saves participants.json
+        │
+/mlx-ai record stop
+        │
+        ▼
+WhisperX transcription (background)
+  ├── Alignment (word-level timestamps)
+  └── Diarization (speaker labels via pyannote)
+        │
+        ▼
+Output per session directory:
+  mixed.wav          — raw mixed audio
+  participants.json  — Discord members present at session start
+  transcript.json    — full WhisperX output (word-level timestamps + speaker labels)
+  speaker_map.json   — SPEAKER_00 → Discord display name mapping
+  transcript.txt     — human-readable per-speaker transcript
+```
 
 ---
 
 ## Features
 
-- 🎙️ **Per-user WAV recording** — each participant gets their own clean audio file
-- 📁 **Timestamped session folders** — `yyyyMMdd_HHmmss_<session_name>`
-- 🔴 **Mid-session join detection** — players who join late are recorded automatically
-- ⏹️ **Auto-stop when channel empties** — no manual intervention needed at session end
-- 💬 **Text-channel announcements** — configurable channel for start/stop notifications
+- 🎙️ **Mixed audio recording** — all participants captured in a single `mixed.wav`
+- 🗣️ **Automatic transcription** — WhisperX runs in the background after recording stops
+- 👥 **Speaker diarization** — pyannote.audio labels each segment with a speaker ID
+- 🏷️ **Discord username mapping** — speaker labels mapped to Discord display names
+- 📁 **Timestamped session folders** — `yyyyMMdd_HHmmss_<session_name>/`
+- ⏹️ **Auto-stop when channel empties** — no manual intervention needed
+- 💬 **Text-channel announcements** — configurable channel for start/stop/transcription events
 - 🐳 **Docker-ready** — pre-wired for future Kubernetes deployment
 
 ---
@@ -18,7 +48,7 @@ A Discord bot that joins a voice channel and records each participant's audio in
 ## Prerequisites
 
 - **Python 3.11+**
-- **ffmpeg** (required by py-cord for voice audio)
+- **ffmpeg** — required by py-cord for voice audio processing
 
 ### Installing ffmpeg
 
@@ -27,6 +57,19 @@ A Discord bot that joins a voice channel and records each participant's audio in
 | macOS    | `brew install ffmpeg` |
 | Debian/Ubuntu | `sudo apt install ffmpeg` |
 | Windows  | Download from <https://ffmpeg.org/download.html> and add to PATH |
+
+---
+
+## HuggingFace Token (required for speaker diarization)
+
+WhisperX uses [pyannote.audio](https://github.com/pyannote/pyannote-audio) for speaker diarization, which requires a HuggingFace token and acceptance of the model licence.
+
+1. Create a free account at <https://huggingface.co>
+2. Go to <https://huggingface.co/settings/tokens> and create a **read** token
+3. Accept the licence at <https://huggingface.co/pyannote/speaker-diarization-3.1>
+4. Add the token to your `.env` file as `HF_TOKEN=...` (or `huggingface_token` in `config.yaml`)
+
+> **Note:** If no token is provided the bot will still record and transcribe, but speaker diarization will be skipped — all segments will be labelled `UNKNOWN`.
 
 ---
 
@@ -82,12 +125,23 @@ cd mlx-ai-discord-recorder
 
 # 2. Copy the environment template and fill in your values
 cp .env.example .env
-# Edit .env — add your DISCORD_TOKEN and GUILD_ID
+# Edit .env — add your DISCORD_TOKEN, GUILD_ID, and HF_TOKEN
 
-# 3. Review and adjust config.yaml (output directory, announcement channel)
+# 3. Review and adjust config.yaml (output directory, announcement channel,
+#    whisper model size)
 # nano config.yaml
 
 # 4. Install Python dependencies
+pip install -r requirements.txt
+```
+
+### WhisperX installation notes
+
+WhisperX depends on PyTorch. The `requirements.txt` installs the CPU version by default. For GPU acceleration install the appropriate CUDA wheel first:
+
+```bash
+# Example for CUDA 12.1
+pip install torch --index-url https://download.pytorch.org/whl/cu121
 pip install -r requirements.txt
 ```
 
@@ -100,6 +154,7 @@ pip install -r requirements.txt
 ```dotenv
 DISCORD_TOKEN=your_bot_token_here
 GUILD_ID=your_numeric_guild_id_here
+HF_TOKEN=your_huggingface_token_here
 ```
 
 ### `config.yaml` (non-secret settings)
@@ -107,6 +162,8 @@ GUILD_ID=your_numeric_guild_id_here
 ```yaml
 output_directory: ./recordings       # Where session folders are written
 announce_channel: "bot-commands"     # Text channel for bot announcements
+huggingface_token: ""                # HuggingFace token (or set HF_TOKEN in .env)
+whisper_model: "base"                # Whisper model size: tiny, base, small, medium, large
 ```
 
 ---
@@ -144,9 +201,9 @@ All commands live under the `/mlx-ai` slash command group.
 
 | Command | Parameters | Description |
 |---------|-----------|-------------|
-| `/mlx-ai record start` | `voice_channel` (required), `session_name` (required) | Join the voice channel and begin per-user recording |
-| `/mlx-ai record stop` | — | Stop the active recording and save all WAV files |
-| `/mlx-ai record status` | — | Show the current session name, channel, duration, and user count |
+| `/mlx-ai record start` | `voice_channel` (required), `session_name` (required) | Join the voice channel and begin recording |
+| `/mlx-ai record stop` | — | Stop the active recording and trigger WhisperX transcription |
+| `/mlx-ai record status` | — | Show current session info including whether transcription is in progress |
 
 ### Parameter details
 
@@ -167,8 +224,9 @@ The bot posts announcements to the channel configured in `config.yaml` (`announc
 |-------|---------|
 | Recording starts | `🔴 Recording started in \`DnD-Voice\` — Session: \`20260327_143000_Campaign1_Session4\`` |
 | User joins mid-session | `🎙️ Now recording \`PlayerTwo\` who joined mid-session` |
-| Recording stops (command) | `⏹️ Recording stopped — files saved to \`recordings/20260327_143000_Campaign1_Session4\`` |
-| Recording stops (channel empty) | `⏹️ Channel empty — recording automatically stopped. Files saved to \`recordings/20260327_143000_Campaign1_Session4\`` |
+| Recording stops | `⏹️ Recording stopped — files saved to \`recordings/20260327_143000_Campaign1_Session4\`` |
+| Transcription starts | `WhisperX is processing the recorded audio...` |
+| Transcription complete | `Transcription complete — files saved to \`recordings/20260327_143000_Campaign1_Session4\`` |
 
 ---
 
@@ -179,24 +237,24 @@ After a session, the output directory will look like this:
 ```
 recordings/
 └── 20260327_143000_Campaign1_Session4/
-    ├── TheNightAngel17.wav
-    ├── PlayerTwo.wav
-    └── PlayerThree.wav
+    ├── mixed.wav           — single mixed audio file of all participants
+    ├── participants.json   — Discord members present at session start
+    ├── transcript.json     — full WhisperX output with word-level timestamps
+    ├── speaker_map.json    — SPEAKER_00 → Discord display name mapping
+    └── transcript.txt      — human-readable per-speaker transcript
 ```
 
-Each `.wav` file is named after the Discord username of the participant and contains only that user's audio — ideal for per-speaker speech-to-text processing.
+### Example `transcript.txt`
 
----
+```
+Speaker Map:
+  SPEAKER_00 -> Mitchell
+  SPEAKER_01 -> Alex
 
-## Next Steps — AI Pipeline
-
-Once you have per-user WAV files, a natural next pipeline is:
-
-1. **Transcription** — feed each WAV into [Whisper](https://github.com/openai/whisper) (runs locally, free)
-2. **Merging** — combine per-user transcripts into a single session script ordered by timestamp
-3. **Vectorisation** — chunk and embed the transcript with a local model (e.g. `nomic-embed-text` via [Ollama](https://ollama.com/))
-4. **Storage** — store vectors in [Chroma](https://www.trychroma.com/) or [Qdrant](https://qdrant.tech/)
-5. **RAG Chat** — query sessions with [Open WebUI](https://github.com/open-webui/open-webui) + Ollama
+Transcript:
+[SPEAKER_00 / Mitchell] 00:01:23 -> 00:01:31: "Let's roll for initiative."
+[SPEAKER_01 / Alex]     00:01:32 -> 00:01:35: "I got a 17."
+```
 
 ---
 
@@ -208,7 +266,7 @@ Key notes for K8s deployment:
 
 - Run **exactly 1 replica** — Discord's gateway connection is stateful
 - Mount a `PersistentVolumeClaim` to `/app/recordings` to retain audio files across pod restarts
-- Store `DISCORD_TOKEN` in a Kubernetes `Secret`, not a `ConfigMap`
+- Store `DISCORD_TOKEN` and `HF_TOKEN` in Kubernetes `Secrets`, not `ConfigMaps`
 
 ---
 
@@ -219,9 +277,9 @@ mlx-ai-discord-recorder/
 ├── bot.py                  # Entry point — loads config, initialises bot, loads cogs
 ├── cogs/
 │   ├── __init__.py         # Makes cogs/ a proper Python package
-│   └── recorder.py         # /mlx-ai command group + all recording logic
+│   └── recorder.py         # /mlx-ai command group + recording + WhisperX logic
 ├── config.yaml             # User-editable configuration (non-secret)
-├── .env.example            # Template for secrets (DISCORD_TOKEN, GUILD_ID)
+├── .env.example            # Template for secrets (DISCORD_TOKEN, GUILD_ID, HF_TOKEN)
 ├── requirements.txt        # Python dependencies
 ├── Dockerfile              # Container definition for future K8s deployment
 ├── .dockerignore

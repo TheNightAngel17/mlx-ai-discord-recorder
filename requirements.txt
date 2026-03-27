@@ -1,9 +1,13 @@
 # MLX AI Discord Recorder — Python dependencies
 #
-# NOTE: This project uses py-cord (a fork of discord.py) because it exposes
-# the discord.sinks API required for per-user voice recording.  py-cord and
-# discord.py share the same `discord` Python namespace and must NOT be
-# installed alongside each other.
+# NOTE: This project uses py-cord (a fork of discord.py) for Discord bot
+# functionality.  py-cord and discord.py share the same `discord` Python
+# namespace and must NOT be installed alongside each other.
+#
+# NOTE: ffmpeg must be installed separately on your system.
+#   macOS:         brew install ffmpeg
+#   Debian/Ubuntu: sudo apt install ffmpeg
+#   Windows:       Download from https://ffmpeg.org/download.html and add to PATH
 
 # Discord bot library with voice extras (py-cord fork that includes sinks API)
 # pinned to 2.6.1 — the last release compatible with Python 3.14
@@ -17,3 +21,13 @@ PyYAML==6.0.1
 
 # .env file loading
 python-dotenv==1.2.2
+
+# Speech-to-text transcription with word-level timestamps and speaker diarization
+# Install from PyPI: pip install whisperx
+# Or from source: pip install git+https://github.com/m-bain/whisperX.git
+whisperx
+
+# PyTorch — CPU version installed by default.
+# For CUDA (GPU) support, install the appropriate wheel manually, e.g.:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu121
+torch
