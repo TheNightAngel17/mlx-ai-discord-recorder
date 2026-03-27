@@ -6,7 +6,8 @@
 # installed alongside each other.
 
 # Discord bot library with voice extras (py-cord fork that includes sinks API)
-py-cord[voice]==2.7.1
+# pinned to 2.6.1 — the last release compatible with Python 3.14
+py-cord[voice]==2.6.1
 
 # Required by py-cord for voice encryption
 PyNaCl==1.5.0
