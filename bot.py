@@ -54,31 +54,28 @@ async def main() -> None:
     config = load_config()
 
     intents = discord.Intents.default()
-    intents.members = True          # Required for on_voice_state_update member info
-    intents.message_content = True  # Privileged intent — required by Discord for verified bots
-    intents.voice_states = True     # Required for voice channel state tracking
+    intents.members = True
+    intents.message_content = True
+    intents.voice_states = True
 
     bot = commands.Bot(
         command_prefix="!",
         intents=intents,
-        auto_sync_commands=False,   # We sync manually in on_ready for guild-scope
+        auto_sync_commands=False,
     )
 
-    # Attach shared state to the bot so cogs can access it
     bot.config = config       # type: ignore[attr-defined]
     bot.guild_id = guild_id   # type: ignore[attr-defined]
 
     @bot.event
     async def on_ready() -> None:
         logger.info("Logged in as %s (ID: %s)", bot.user, bot.user.id)
-        # load_extension is synchronous in py-cord 2.6; must be called after
-        # the bot is ready so guild_id is available on the bot instance
-        bot.load_extension("cogs.recorder")
-        # Sync commands scoped to the configured guild — takes effect immediately
         await bot.sync_commands(guild_ids=[guild_id])
         logger.info("Slash commands synced to guild %s", guild_id)
 
-    await bot.start(token)
+    async with bot:
+        await bot.load_extension("cogs.recorder")
+        await bot.start(token)
 
 if __name__ == "__main__":
     asyncio.run(main())
