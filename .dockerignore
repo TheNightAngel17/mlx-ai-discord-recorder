@@ -1,0 +1,26 @@
+# Secrets — never bake these into the image
+.env
+
+# Session audio files — can be large and should stay on the host / PVC
+recordings/
+
+# Python bytecode and caches
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Git history
+.git/
+.gitignore
+
+# Editor / IDE files
+.vscode/
+.idea/
+*.swp
