@@ -117,16 +117,16 @@ class Recorder {
       return;
     }
 
+    // Defer immediately so Discord doesn't time out while we connect
+    await interaction.deferReply({ ephemeral: true });
+
     // Verify the selected channel is actually a voice channel
     const { ChannelType } = require("discord.js");
     if (
       voiceChannel.type !== ChannelType.GuildVoice &&
       voiceChannel.type !== ChannelType.GuildStageVoice
     ) {
-      await interaction.reply({
-        content: "Please select a voice channel.",
-        ephemeral: true,
-      });
+      await interaction.editReply({ content: "Please select a voice channel." });
       return;
     }
 
@@ -143,9 +143,8 @@ class Recorder {
     try {
       fs.mkdirSync(sessionDir, { recursive: true });
     } catch (err) {
-      await interaction.reply({
+      await interaction.editReply({
         content: `Failed to create session directory: ${err.message}`,
-        ephemeral: true,
       });
       return;
     }
@@ -161,9 +160,8 @@ class Recorder {
         selfMute: true,
       });
     } catch (err) {
-      await interaction.reply({
+      await interaction.editReply({
         content: `Failed to join voice channel: ${err.message}`,
-        ephemeral: true,
       });
       return;
     }
@@ -189,9 +187,8 @@ class Recorder {
       this.sessionDir = null;
       this.startTime = null;
       this.audioBuffers = new Map();
-      await interaction.reply({
+      await interaction.editReply({
         content: "Timed out waiting for voice connection to be ready.",
-        ephemeral: true,
       });
       return;
     }
@@ -227,9 +224,8 @@ class Recorder {
       );
     }
 
-    await interaction.reply({
+    await interaction.editReply({
       content: `Recording started in \`${voiceChannel.name}\` — Session: \`${folderName}\``,
-      ephemeral: true,
     });
   }
 
