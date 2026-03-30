@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `py-process/vectorize.py` — Transcript vectorization tool that chunks `_combined_transcript.txt` into configurable time-window segments, embeds each chunk via Ollama (`nomic-embed-text`), and persists the embeddings to a local ChromaDB vector database.
+  - CLI: `python vectorize.py <session_name>` or `python vectorize.py --all` to process every session.
+  - `--force` flag to re-index an already-vectorized session.
+  - Stores all sessions in a single ChromaDB collection (`dnd_sessions`) with `session_name`, `start_time`, `end_time`, and `speakers` metadata for cross-session queries.
+- `config.yaml` — New vector DB and RAG settings: `vector_db_directory`, `embedding_model`, `chunk_minutes`, `ollama_base_url`.
+- `py-process/requirements.txt` — Added `chromadb` and `requests` dependencies for vectorization support.
+
 - `/mlx-ai transcribe start <session_name> [model] [language]` slash command — triggers Whisper transcription from Discord by spawning the Python script as a child process.
 - `/mlx-ai transcribe status` slash command — check if a transcription is currently running.
 - `js-bot/transcriber.js` — Transcriber module that manages the Python subprocess, enforces one-transcription-at-a-time, and posts results/errors back to Discord.
