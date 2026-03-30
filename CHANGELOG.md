@@ -28,6 +28,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Double-transcription bug in `py-process/transcribe.py`: each WAV file was being transcribed twice — once for the per-user `.txt` file and again when building the combined transcript. Results from the first pass are now cached in a dict and reused, halving Whisper processing time per session.
 - Voice connection timeout ("Timed out waiting for voice connection to be ready") caused by two missing pieces:
   1. `@discordjs/voice` 0.18.0 had no DAVE protocol support — upgraded to 0.19.2 which bundles `@snazzah/davey` for the DAVE handshake.
   2. No encryption library was installed — added `sodium-native` so the voice connection can complete its crypto negotiation.

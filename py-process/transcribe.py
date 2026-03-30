@@ -121,7 +121,8 @@ def main():
     model = whisper.load_model(model_size)
     print(f"Model loaded in {time.time() - t0:.1f}s\n")
 
-    # Transcribe each user's WAV
+    # Transcribe each user's WAV (cache results for reuse in combined transcript)
+    results_by_user: dict[str, dict] = {}
     for wav_path in wav_files:
         username = wav_path.stem  # filename without extension = sanitised username
         print(f"Transcribing {username}...", end=" ", flush=True)
@@ -129,6 +130,8 @@ def main():
         t0 = time.time()
         result = transcribe_wav(model, wav_path, language)
         elapsed = time.time() - t0
+
+        results_by_user[username] = result
 
         # Write per-user transcript
         txt_path = session_dir / f"{username}.txt"
@@ -141,9 +144,7 @@ def main():
 
     # Write a combined transcript with all users merged by timestamp
     all_segments = []
-    for wav_path in wav_files:
-        username = wav_path.stem
-        result = transcribe_wav(model, wav_path, language)
+    for username, result in results_by_user.items():
         for seg in result.get("segments", []):
             all_segments.append(
                 {
