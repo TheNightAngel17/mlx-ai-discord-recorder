@@ -3,6 +3,7 @@ bot.py — Entry point for the MLX AI Discord Recorder bot.
 
 Responsibilities:
   - Load configuration from config.yaml and secrets from .env
+  - Load libopus for Discord voice support (Linux)
   - Initialise the discord.py (py-cord) Bot with the required intents
   - Load the RecorderCog extension
   - Sync slash commands to the configured guild on startup
@@ -11,6 +12,7 @@ Responsibilities:
 from __future__ import annotations
 
 import asyncio
+import ctypes.util
 import logging
 import os
 
@@ -24,6 +26,38 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Opus auto-load (required for Discord voice on Linux)
+# ---------------------------------------------------------------------------
+def _load_opus() -> None:
+    """Attempt to load libopus so py-cord voice recording works on Linux."""
+    if discord.opus.is_loaded():
+        return
+
+    candidates = [
+        "libopus.so.0",                                      # short name (most Linux)
+        ctypes.util.find_library("opus"),                    # dynamic lookup
+        "/usr/lib/x86_64-linux-gnu/libopus.so.0",           # Debian/Ubuntu fallback
+        "/usr/lib/aarch64-linux-gnu/libopus.so.0",          # ARM (Raspberry Pi etc.)
+    ]
+
+    for name in candidates:
+        if not name:
+            continue
+        try:
+            discord.opus.load_opus(name)
+            logger.info("Opus loaded from: %s", name)
+            return
+        except OSError:
+            continue
+
+    logger.warning(
+        "Could not load libopus — voice recording will not work. "
+        "On Debian/Ubuntu run: sudo apt install libopus0"
+    )
+
+_load_opus()
 
 def load_config() -> dict:
     """Load and return the contents of config.yaml."""
