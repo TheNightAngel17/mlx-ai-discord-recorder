@@ -13,6 +13,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - Config: `mp3_bitrate` (default `"128k"`) and `keep_wav` (default `true`) in `config.yaml`.
 - `mp3_bitrate` and `keep_wav` settings in `config.yaml` to control MP3 compression bitrate and WAV file retention.
 - `pydub>=0.25.1` added to `py-process/requirements.txt` (wraps `ffmpeg`, already a prerequisite).
+- `py-process/vectorize.py` — Transcript vectorization tool that chunks `_combined_transcript.txt` into configurable time-window segments, embeds each chunk via Ollama (`nomic-embed-text`), and persists the embeddings to a local ChromaDB vector database.
+  - CLI: `python vectorize.py <session_name>` or `python vectorize.py --all` to process every session.
+  - `--force` flag to re-index an already-vectorized session.
+  - Stores all sessions in a single ChromaDB collection (`dnd_sessions`) with `session_name`, `start_time`, `end_time`, and `speakers` metadata for cross-session queries.
+- `config.yaml` — New vector DB and RAG settings: `vector_db_directory`, `embedding_model`, `chunk_minutes`, `ollama_base_url`.
+- `py-process/requirements.txt` — Added `chromadb` and `requests` dependencies for vectorization support.
 
 - `/mlx-ai transcribe start <session_name> [model] [language]` slash command — triggers Whisper transcription from Discord by spawning the Python script as a child process.
 - `/mlx-ai transcribe status` slash command — check if a transcription is currently running.
@@ -34,6 +40,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Double-transcription bug in `py-process/transcribe.py`: each WAV file was being transcribed twice — once for the per-user `.txt` file and again when building the combined transcript. Results from the first pass are now cached in a dict and reused, halving Whisper processing time per session.
 - Voice connection timeout ("Timed out waiting for voice connection to be ready") caused by two missing pieces:
   1. `@discordjs/voice` 0.18.0 had no DAVE protocol support — upgraded to 0.19.2 which bundles `@snazzah/davey` for the DAVE handshake.
   2. No encryption library was installed — added `sodium-native` so the voice connection can complete its crypto negotiation.
