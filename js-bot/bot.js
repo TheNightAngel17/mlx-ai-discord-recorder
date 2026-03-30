@@ -232,8 +232,89 @@ client.on("interactionCreate", async (interaction) => {
 });
 
 // ---------------------------------------------------------------------------
-// Voice state forwarding
+// Button + select menu routing for post-processing
 // ---------------------------------------------------------------------------
+client.on("interactionCreate", async (interaction) => {
+  const { ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder } = require("discord.js");
+
+  // ── Model select menu: post_process_model:<sessionName> ──────────────────
+  if (interaction.isStringSelectMenu() && interaction.customId.startsWith("post_process_model:")) {
+    const sessionName = interaction.customId.slice("post_process_model:".length);
+    const chosenModel = interaction.values[0];
+
+    // Rebuild the select menu (keep it enabled so the user can change their mind)
+    const modelSelectRow = new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId(`post_process_model:${sessionName}`)
+        .setPlaceholder(`Model: ${chosenModel}`)
+        .addOptions([
+          { label: "tiny",   description: "Fastest, lowest accuracy",  value: "tiny",   default: chosenModel === "tiny"   },
+          { label: "base",   description: "Fast, decent accuracy",      value: "base",   default: chosenModel === "base"   },
+          { label: "small",  description: "Balanced",                   value: "small",  default: chosenModel === "small"  },
+          { label: "medium", description: "Slower, higher accuracy",    value: "medium", default: chosenModel === "medium" },
+          { label: "large",  description: "Slowest, best accuracy",     value: "large",  default: chosenModel === "large"  },
+        ])
+    );
+
+    // Update the button to reflect the newly chosen model
+    const startButtonRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`post_process:${sessionName}:${chosenModel}`)
+        .setLabel(`▶ Start Processing (${chosenModel})`)
+        .setStyle(ButtonStyle.Primary)
+    );
+
+    await interaction.update({ components: [modelSelectRow, startButtonRow] });
+    return;
+  }
+
+  // ── Start button: post_process:<sessionName>:<model> ─────────────────────
+  if (interaction.isButton() && interaction.customId.startsWith("post_process:")) {
+    const parts = interaction.customId.split(":");
+    // customId format: post_process:<sessionName>:<model>
+    // sessionName itself may contain colons, so everything between index 1 and
+    // the last segment is the session name.
+    const model = parts[parts.length - 1];
+    const sessionName = parts.slice(1, parts.length - 1).join(":");
+
+    const defaultLang =
+      config.whisper_language === "auto"
+        ? null
+        : config.whisper_language || null;
+
+    // Disable both rows so nothing can be clicked while processing runs
+    const disabledSelectRow = new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId(`post_process_model:${sessionName}`)
+        .setPlaceholder(`Model: ${model}`)
+        .addOptions([
+          { label: "tiny",   value: "tiny"   },
+          { label: "base",   value: "base"   },
+          { label: "small",  value: "small"  },
+          { label: "medium", value: "medium" },
+          { label: "large",  value: "large"  },
+        ])
+        .setDisabled(true)
+    );
+    const disabledButtonRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`post_process:${sessionName}:${model}`)
+        .setLabel(`▶ Start Processing (${model})`)
+        .setStyle(ButtonStyle.Primary)
+        .setDisabled(true)
+    );
+    await interaction.update({ components: [disabledSelectRow, disabledButtonRow] });
+
+    await postProcessor.postProcessFromButton(
+      interaction,
+      sessionName,
+      model,
+      defaultLang
+    );
+  }
+});
+
+
 client.on("voiceStateUpdate", (oldState, newState) => {
   recorder.onVoiceStateUpdate(oldState, newState);
 });

@@ -19,6 +19,12 @@ const {
   VoiceConnectionStatus,
   EndBehaviorType,
 } = require("@discordjs/voice");
+const {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  StringSelectMenuBuilder,
+} = require("discord.js");
 const prism = require("prism-media");
 
 // WAV parameters — must match the Opus decoder settings
@@ -407,19 +413,36 @@ class Recorder {
 
     // Announce
     const relPath = path.join(outputDir, sessionName || "");
-    const postProcessHint = `\nTo post-process, run:\n\`/mlx-ai post-process start session_name:${sessionName}\``;
     if (guild) {
       const announceChannel = await this._getAnnounceChannel(guild);
       if (announceChannel) {
-        if (auto) {
-          await announceChannel.send(
-            `Recording automatically stopped (channel empty). Files saved to \`${relPath}\`${postProcessHint}`
-          );
-        } else {
-          await announceChannel.send(
-            `Recording stopped — files saved to \`${relPath}\`${postProcessHint}`
-          );
-        }
+        const defaultModel = this.config.whisper_model || "base";
+
+        const modelSelectRow = new ActionRowBuilder().addComponents(
+          new StringSelectMenuBuilder()
+            .setCustomId(`post_process_model:${sessionName}`)
+            .setPlaceholder(`Model: ${defaultModel} (click to change)`)
+            .addOptions([
+              { label: "tiny",   description: "Fastest, lowest accuracy",  value: "tiny"   },
+              { label: "base",   description: "Fast, decent accuracy",      value: "base"   },
+              { label: "small",  description: "Balanced",                   value: "small"  },
+              { label: "medium", description: "Slower, higher accuracy",    value: "medium" },
+              { label: "large",  description: "Slowest, best accuracy",     value: "large"  },
+            ])
+        );
+
+        const startButtonRow = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`post_process:${sessionName}:${defaultModel}`)
+            .setLabel(`▶ Start Processing (${defaultModel})`)
+            .setStyle(ButtonStyle.Primary)
+        );
+
+        const content = auto
+          ? `Recording automatically stopped (channel empty). Files saved to \`${relPath}\``
+          : `Recording stopped — files saved to \`${relPath}\``;
+
+        await announceChannel.send({ content, components: [modelSelectRow, startButtonRow] });
       }
     }
 
