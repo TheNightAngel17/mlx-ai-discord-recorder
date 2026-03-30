@@ -14,6 +14,7 @@ A Discord bot that joins a voice channel and records each participant's audio in
 - 🎵 **Audio merge** — mix all per-user WAVs into a single combined MP3 via `/mlx-ai merge-audio start`
 - 📝 **Whisper transcription** — per-user and combined transcripts via `/mlx-ai post-process start`
 - 🧠 **Vector embeddings** — chunk and embed transcripts into ChromaDB via `/mlx-ai vectorize start`
+- 🔍 **RAG query** — ask natural-language questions about your sessions via `py-query/query.py`, with support for Ollama, OpenAI, and Anthropic
 - 🐳 **Docker-ready** — pre-wired for future Kubernetes deployment
 
 ---
@@ -230,7 +231,13 @@ The full workflow from recording to searchable archive:
    - **Transcribe** (`transcribe.py`) → per-user `.txt` + `_combined_transcript.txt`
    - **Merge audio** (`merge_audio.py`) → `_session_mix.wav` + `_session_mix.mp3`
    - **Vectorize** (`vectorize.py`) → chunks embedded and stored in ChromaDB
-3. **Query** — use `py-process/vectordb_helper.py` for CLI inspection, or connect any RAG front-end (e.g. [Open WebUI](https://github.com/open-webui/open-webui)) to the ChromaDB collection `dnd_sessions`
+3. **Query** — use `py-query/query.py` to ask questions about your sessions:
+   ```bash
+   cd py-query
+   python query.py "What happened when the party entered the cave?"
+   python query.py "Who attacked the dragon?" --session 20260330_test --show-sources
+   ```
+   Supports Ollama (local), OpenAI, and Anthropic as LLM backends — configured in `config.yaml`.
 
 Steps can also be run individually via their own slash commands (`/mlx-ai merge-audio start`, `/mlx-ai vectorize start`) or directly from the CLI in `py-process/`.
 
@@ -253,19 +260,25 @@ Key notes for K8s deployment:
 ```
 mlx-ai-discord-recorder/
 ├── config.yaml             # User-editable configuration (non-secret)
-├── .env.example            # Template for secrets (DISCORD_TOKEN, GUILD_ID)
+├── .env.example            # Template for secrets (DISCORD_TOKEN, GUILD_ID, API keys)
 ├── js-bot/
 │   ├── bot.js              # Entry point — slash commands, interaction routing
 │   ├── recorder.js         # Voice recording logic
 │   ├── postProcessor.js    # Spawns Python scripts; handles merge-audio & vectorize
 │   └── package.json
-└── py-process/
-    ├── process.py           # Orchestrator — runs transcribe → merge → vectorize
-    ├── transcribe.py        # Whisper transcription (per-user WAVs → .txt files)
-    ├── merge_audio.py       # Mix per-user WAVs → _session_mix.wav + .mp3
-    ├── vectorize.py         # Chunk + embed transcript → ChromaDB
-    ├── vectordb_helper.py   # CLI tool to inspect, search, and manage the vector DB
-    └── requirements.txt
+├── py-process/
+│   ├── process.py           # Orchestrator — runs transcribe → merge → vectorize
+│   ├── transcribe.py        # Whisper transcription (per-user WAVs → .txt files)
+│   ├── merge_audio.py       # Mix per-user WAVs → _session_mix.wav + .mp3
+│   ├── vectorize.py         # Chunk + embed transcript → ChromaDB
+│   ├── vectordb_helper.py   # CLI tool to inspect, search, and manage the vector DB
+│   └── requirements.txt
+└── py-query/
+    ├── providers.py         # LLM provider abstraction (Ollama, OpenAI, Anthropic)
+    ├── rag.py               # Core RAG logic (embed → retrieve → generate)
+    ├── query.py             # CLI entry point for RAG queries
+    ├── requirements.txt
+    └── README.md
 ```
 
 ---
