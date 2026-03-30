@@ -22,3 +22,7 @@ env/
 .vscode/
 .idea/
 *.swp
+
+# JS bot dependencies
+js-bot/node_modules/
+js-bot/package-lock.json
