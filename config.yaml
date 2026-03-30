@@ -17,3 +17,10 @@ announce_channel: "bot-commands"
 whisper_model: "base"
 # Language code (e.g. "en", "es", "fr"). Set to "auto" for auto-detection.
 whisper_language: "en"
+
+# Vector DB and RAG settings
+# Update these paths to match your OS (Windows: D:/path, Linux/macOS: /path or ./relative)
+vector_db_directory: D:/mlx-ai-vectordb   # Where ChromaDB persists data
+embedding_model: nomic-embed-text          # Ollama embedding model name
+chunk_minutes: 3                           # Time-window size for chunking transcripts (minutes)
+ollama_base_url: http://localhost:11434    # Ollama API base URL
