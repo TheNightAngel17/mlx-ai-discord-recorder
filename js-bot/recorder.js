@@ -12,7 +12,12 @@
 
 const fs = require("fs");
 const path = require("path");
-const { joinVoiceChannel, EndBehaviorType } = require("@discordjs/voice");
+const {
+  joinVoiceChannel,
+  entersState,
+  VoiceConnectionStatus,
+  EndBehaviorType,
+} = require("@discordjs/voice");
 const prism = require("prism-media");
 
 // WAV parameters — must match the Opus decoder settings
@@ -20,6 +25,10 @@ const SAMPLE_RATE = 48000;
 const CHANNELS = 2;
 const BIT_DEPTH = 16; // 16-bit PCM
 const BYTES_PER_SAMPLE = BIT_DEPTH / 8;
+
+// Timeouts
+const CONNECTION_READY_TIMEOUT_MS = 20_000; // max wait for VoiceConnectionStatus.Ready
+const STREAM_FINISH_TIMEOUT_MS = 3_000; // max wait for fileStream 'finish' on stop
 
 /**
  * Build a WAV file Buffer from raw PCM data.
@@ -84,7 +93,7 @@ class Recorder {
     /** @type {Date|null} */
     this.startTime = null;
 
-    // userId -> { chunks: Buffer[], username: string, stream: ReadableStream, decoder: prism.opus.Decoder }
+    // userId -> { username, opusStream, decoder, fileStream, pcmPath }
     this.audioBuffers = new Map();
   }
 
@@ -108,16 +117,16 @@ class Recorder {
       return;
     }
 
+    // Defer immediately so Discord doesn't time out while we connect
+    await interaction.deferReply({ ephemeral: true });
+
     // Verify the selected channel is actually a voice channel
     const { ChannelType } = require("discord.js");
     if (
       voiceChannel.type !== ChannelType.GuildVoice &&
       voiceChannel.type !== ChannelType.GuildStageVoice
     ) {
-      await interaction.reply({
-        content: "Please select a voice channel.",
-        ephemeral: true,
-      });
+      await interaction.editReply({ content: "Please select a voice channel." });
       return;
     }
 
@@ -134,9 +143,8 @@ class Recorder {
     try {
       fs.mkdirSync(sessionDir, { recursive: true });
     } catch (err) {
-      await interaction.reply({
+      await interaction.editReply({
         content: `Failed to create session directory: ${err.message}`,
-        ephemeral: true,
       });
       return;
     }
@@ -152,9 +160,8 @@ class Recorder {
         selfMute: true,
       });
     } catch (err) {
-      await interaction.reply({
+      await interaction.editReply({
         content: `Failed to join voice channel: ${err.message}`,
-        ephemeral: true,
       });
       return;
     }
@@ -166,6 +173,25 @@ class Recorder {
     this.sessionDir = sessionDir;
     this.startTime = new Date();
     this.audioBuffers = new Map();
+
+    // Wait until the voice connection is fully ready before subscribing.
+    // Audio packets are only delivered once the connection reaches Ready state.
+    try {
+      await entersState(connection, VoiceConnectionStatus.Ready, CONNECTION_READY_TIMEOUT_MS);
+    } catch (err) {
+      connection.destroy();
+      this.isRecording = false;
+      this.connection = null;
+      this.recordingChannel = null;
+      this.sessionName = null;
+      this.sessionDir = null;
+      this.startTime = null;
+      this.audioBuffers = new Map();
+      await interaction.editReply({
+        content: "Timed out waiting for voice connection to be ready.",
+      });
+      return;
+    }
 
     // Subscribe to all members currently in the channel
     for (const member of voiceChannel.members.values()) {
@@ -198,9 +224,8 @@ class Recorder {
       );
     }
 
-    await interaction.reply({
+    await interaction.editReply({
       content: `Recording started in \`${voiceChannel.name}\` — Session: \`${folderName}\``,
-      ephemeral: true,
     });
   }
 
@@ -243,32 +268,60 @@ class Recorder {
     const outputDir = this.config.output_directory || "./recordings";
 
     // Save WAV files for all captured users
+    const savePromises = [];
     for (const [userId, entry] of this.audioBuffers.entries()) {
-      const { chunks, username } = entry;
+      const { username, opusStream, fileStream, pcmPath } = entry;
 
-      // Stop the decoder stream
-      if (entry.stream && !entry.stream.destroyed) {
-        entry.stream.destroy();
-      }
-      if (entry.decoder && !entry.decoder.destroyed) {
-        entry.decoder.destroy();
-      }
+      savePromises.push(
+        new Promise((resolve) => {
+          // Stop new opus packets from coming in
+          if (opusStream && !opusStream.destroyed) {
+            opusStream.destroy();
+          }
 
-      const pcmData = Buffer.concat(chunks);
-      if (pcmData.length === 0) {
-        this.logger.warn(`No audio captured for ${username} — skipping.`);
-        continue;
-      }
+          const finish = () => {
+            try {
+              const pcmData = fs.readFileSync(pcmPath);
+              if (pcmData.length === 0) {
+                this.logger.warn(
+                  `No audio captured for ${username} — skipping.`
+                );
+                fs.unlinkSync(pcmPath);
+              } else {
+                const safeName = sanitiseName(username);
+                const wavPath = path.join(sessionDir, `${safeName}.wav`);
+                fs.writeFileSync(wavPath, buildWav(pcmData));
+                fs.unlinkSync(pcmPath); // clean up temp PCM
+                this.logger.info(
+                  `Saved recording for ${username} -> ${wavPath}`
+                );
+              }
+            } catch (err) {
+              this.logger.error(
+                `Failed to save WAV for ${username}: ${err.message}`
+              );
+            }
+            resolve();
+          };
 
-      const safeName = sanitiseName(username);
-      const filePath = path.join(sessionDir, `${safeName}.wav`);
-      try {
-        fs.writeFileSync(filePath, buildWav(pcmData));
-        this.logger.info(`Saved recording for ${username} -> ${filePath}`);
-      } catch (err) {
-        this.logger.error(`Failed to save WAV for ${username}: ${err.message}`);
-      }
+          if (fileStream.writableEnded || fileStream.destroyed) {
+            finish();
+          } else {
+            // Fallback timeout in case 'finish' never fires
+            const timer = setTimeout(finish, STREAM_FINISH_TIMEOUT_MS);
+            fileStream.once("finish", () => {
+              clearTimeout(timer);
+              finish();
+            });
+            fileStream.once("error", () => {
+              clearTimeout(timer);
+              finish();
+            });
+          }
+        })
+      );
     }
+    await Promise.all(savePromises);
 
     // Disconnect
     if (this.connection) {
@@ -420,21 +473,21 @@ class Recorder {
       frameSize: 960,
     });
 
-    const chunks = [];
-    const entry = { chunks, username, stream: opusStream, decoder };
-    this.audioBuffers.set(userId, entry);
+    // Write PCM directly to a temp file to avoid in-memory buffering races
+    const pcmPath = path.join(
+      this.sessionDir,
+      `${sanitiseName(username)}.pcm`
+    );
+    const fileStream = fs.createWriteStream(pcmPath);
 
-    opusStream.pipe(decoder);
-
-    decoder.on("data", (chunk) => {
-      chunks.push(chunk);
-    });
+    opusStream.pipe(decoder).pipe(fileStream);
 
     decoder.on("error", (err) => {
-      this.logger.warn(
-        `Opus decoder error for ${username}: ${err.message}`
-      );
+      this.logger.warn(`Opus decoder error for ${username}: ${err.message}`);
     });
+
+    const entry = { username, opusStream, decoder, fileStream, pcmPath };
+    this.audioBuffers.set(userId, entry);
 
     this.logger.info(`Subscribed to audio for ${username} (${userId})`);
   }
