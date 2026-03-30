@@ -11,12 +11,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `/mlx-ai transcribe start <session_name> [model] [language]` slash command — triggers Whisper transcription from Discord by spawning the Python script as a child process.
 - `/mlx-ai transcribe status` slash command — check if a transcription is currently running.
 - `js-bot/transcriber.js` — Transcriber module that manages the Python subprocess, enforces one-transcription-at-a-time, and posts results/errors back to Discord.
-- `py-transcribe/transcribe.py` — Whisper-based transcription tool that reads per-user WAV files from a session folder and produces timestamped per-user transcripts plus a combined chronological transcript.
+- `py-process/transcribe.py` — Whisper-based transcription tool that reads per-user WAV files from a session folder and produces timestamped per-user transcripts plus a combined chronological transcript.
   - CLI flags: `--model` (tiny/base/small/medium/large), `--language` (auto-detect by default).
-- `py-transcribe/requirements.txt` — Python dependencies for the transcription pipeline.
+- `py-process/requirements.txt` — Python dependencies for the transcription pipeline.
 - Voice connection state-change and error logging in `recorder.js` for debugging connection issues.
 - `sodium-native` ^5.1.0 dependency — required by `@discordjs/voice` as the voice encryption backend.
-- `py-transcribe/` directory — placeholder for the upcoming Whisper/MLX transcription pipeline.
+- `py-process/` directory — placeholder for the upcoming Whisper/MLX transcription pipeline.
 
 ### Moved
 

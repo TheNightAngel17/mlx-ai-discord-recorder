@@ -22,7 +22,7 @@ import whisper
 
 
 def load_config() -> dict:
-    """Load config.yaml from the repo root (one level up from py-transcribe/)."""
+    """Load config.yaml from the repo root (one level up from py-process/)."""
     config_path = Path(__file__).resolve().parent.parent / "config.yaml"
     if not config_path.exists():
         print(f"Error: config.yaml not found at {config_path}", file=sys.stderr)

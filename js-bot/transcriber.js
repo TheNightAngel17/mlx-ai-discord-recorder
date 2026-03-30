@@ -78,7 +78,7 @@ class Transcriber {
 
     // Resolve paths
     const repoRoot = path.resolve(__dirname, "..");
-    const scriptPath = path.join(repoRoot, "py-transcribe", "transcribe.py");
+    const scriptPath = path.join(repoRoot, "py-process", "transcribe.py");
 
     // Find the Python executable — prefer the venv, fall back to system python
     const venvPython = path.join(repoRoot, ".venv", "Scripts", "python.exe");

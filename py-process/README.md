@@ -1,4 +1,4 @@
-# py-transcribe — Whisper Transcription Pipeline
+# py-process — Whisper Transcription Pipeline
 
 Transcribe per-user voice recordings produced by the JS bot using [OpenAI Whisper](https://github.com/openai/whisper).
 
@@ -22,7 +22,7 @@ This tool reads those WAV files and produces:
 ### 1. Install base dependencies
 
 ```bash
-cd py-transcribe
+cd py-process
 pip install -r requirements.txt
 ```
 
