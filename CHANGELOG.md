@@ -10,6 +10,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Voice connection state-change and error logging in `recorder.js` for debugging connection issues.
 - `sodium-native` ^5.1.0 dependency — required by `@discordjs/voice` as the voice encryption backend.
+- `py-transcribe/` directory — placeholder for the upcoming Whisper/MLX transcription pipeline.
+
+### Moved
+
+- Archived the original Python bot (`bot.py`, `cogs/`, `Dockerfile`, `.dockerignore`, `requirements.txt`) into `py-bot_old/` for historical reference. The Python bot is non-functional due to Discord's DAVE E2EE requirement and has been fully replaced by the JS bot.
 
 ### Changed
 
