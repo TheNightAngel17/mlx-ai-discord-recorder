@@ -11,6 +11,9 @@ A Discord bot that joins a voice channel and records each participant's audio in
 - 🔴 **Mid-session join detection** — players who join late are recorded automatically
 - ⏹️ **Auto-stop when channel empties** — no manual intervention needed at session end
 - 💬 **Text-channel announcements** — configurable channel for start/stop notifications
+- 🎵 **Audio merge** — mix all per-user WAVs into a single combined MP3 via `/mlx-ai merge-audio start`
+- 📝 **Whisper transcription** — per-user and combined transcripts via `/mlx-ai post-process start`
+- 🧠 **Vector embeddings** — chunk and embed transcripts into ChromaDB via `/mlx-ai vectorize start`
 - 🐳 **Docker-ready** — pre-wired for future Kubernetes deployment
 
 ---
@@ -142,20 +145,46 @@ docker run --rm \
 
 All commands live under the `/mlx-ai` slash command group.
 
+### Recording
+
 | Command | Parameters | Description |
 |---------|-----------|-------------|
 | `/mlx-ai record start` | `voice_channel` (required), `session_name` (required) | Join the voice channel and begin per-user recording |
 | `/mlx-ai record stop` | — | Stop the active recording and save all WAV files |
 | `/mlx-ai record status` | — | Show the current session name, channel, duration, and user count |
 
+### Post-Processing (full pipeline)
+
+| Command | Parameters | Description |
+|---------|-----------|-------------|
+| `/mlx-ai post-process start` | `session_name` (required), `model` (optional), `language` (optional) | Run the full pipeline: transcribe → merge audio → vectorize |
+| `/mlx-ai post-process status` | — | Check if post-processing is currently running |
+
+### Audio Merge
+
+| Command | Parameters | Description |
+|---------|-----------|-------------|
+| `/mlx-ai merge-audio start` | `session_name` (required) | Mix per-user WAVs into `_session_mix.wav` + `_session_mix.mp3` |
+| `/mlx-ai merge-audio status` | — | Check if an audio merge is currently running |
+
+### Vectorize
+
+| Command | Parameters | Description |
+|---------|-----------|-------------|
+| `/mlx-ai vectorize start` | `session_name` (required, or `"all"`), `force` (optional boolean) | Chunk and embed a session's transcript into ChromaDB |
+| `/mlx-ai vectorize status` | — | Check if vectorization is currently running |
+
 ### Parameter details
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `voice_channel` | Channel (dropdown) | The voice channel to record; rendered as a dropdown filtered to voice channels |
-| `session_name` | String | Free-text label appended to the timestamp folder, e.g. `Campaign1_Session4` |
+| `voice_channel` | Channel (dropdown) | The voice channel to record; filtered to voice channels only |
+| `session_name` | String | Session folder name, e.g. `20260330_033020_test`, or `"all"` for vectorize |
+| `model` | Choice | Whisper model size: `tiny` / `base` / `small` / `medium` / `large` (default from `config.yaml`) |
+| `language` | String | Language code, e.g. `"en"`. Omit for auto-detect |
+| `force` | Boolean | Re-index even if the session has already been vectorized |
 
-All command responses are **ephemeral** (visible only to the user who ran the command).
+All command responses are **ephemeral** (visible only to the user who ran the command) except for progress messages posted to the `announce_channel`.
 
 ---
 
@@ -174,29 +203,36 @@ The bot posts announcements to the channel configured in `config.yaml` (`announc
 
 ## Output Structure
 
-After a session, the output directory will look like this:
+After a full pipeline run, the session folder looks like this:
 
 ```
 recordings/
 └── 20260327_143000_Campaign1_Session4/
-    ├── TheNightAngel17.wav
+    ├── TheNightAngel17.wav              # per-user recording (kept if keep_wav: true)
     ├── PlayerTwo.wav
-    └── PlayerThree.wav
+    ├── TheNightAngel17.txt              # per-user Whisper transcript
+    ├── PlayerTwo.txt
+    ├── _combined_transcript.txt         # all users merged chronologically
+    ├── _session_mix.wav                 # all users mixed into one WAV
+    └── _session_mix.mp3                 # compressed combined audio
 ```
 
-Each `.wav` file is named after the Discord username of the participant and contains only that user's audio — ideal for per-speaker speech-to-text processing.
+Vector embeddings are stored separately in `vector_db_directory` (default `D:/mlx-ai-vectordb`).
 
 ---
 
-## Next Steps — AI Pipeline
+## AI Pipeline
 
-Once you have per-user WAV files, a natural next pipeline is:
+The full workflow from recording to searchable archive:
 
-1. **Transcription** — feed each WAV into [Whisper](https://github.com/openai/whisper) (runs locally, free)
-2. **Merging** — combine per-user transcripts into a single session script ordered by timestamp
-3. **Vectorisation** — chunk and embed the transcript with a local model (e.g. `nomic-embed-text` via [Ollama](https://ollama.com/))
-4. **Storage** — store vectors in [Chroma](https://www.trychroma.com/) or [Qdrant](https://qdrant.tech/)
-5. **RAG Chat** — query sessions with [Open WebUI](https://github.com/open-webui/open-webui) + Ollama
+1. **Record** — `/mlx-ai record start` → per-user `.wav` files
+2. **Post-process** — `/mlx-ai post-process start` runs all three steps automatically:
+   - **Transcribe** (`transcribe.py`) → per-user `.txt` + `_combined_transcript.txt`
+   - **Merge audio** (`merge_audio.py`) → `_session_mix.wav` + `_session_mix.mp3`
+   - **Vectorize** (`vectorize.py`) → chunks embedded and stored in ChromaDB
+3. **Query** — use `py-process/vectordb_helper.py` for CLI inspection, or connect any RAG front-end (e.g. [Open WebUI](https://github.com/open-webui/open-webui)) to the ChromaDB collection `dnd_sessions`
+
+Steps can also be run individually via their own slash commands (`/mlx-ai merge-audio start`, `/mlx-ai vectorize start`) or directly from the CLI in `py-process/`.
 
 ---
 
@@ -216,17 +252,20 @@ Key notes for K8s deployment:
 
 ```
 mlx-ai-discord-recorder/
-├── bot.py                  # Entry point — loads config, initialises bot, loads cogs
-├── cogs/
-│   ├── __init__.py         # Makes cogs/ a proper Python package
-│   └── recorder.py         # /mlx-ai command group + all recording logic
 ├── config.yaml             # User-editable configuration (non-secret)
 ├── .env.example            # Template for secrets (DISCORD_TOKEN, GUILD_ID)
-├── requirements.txt        # Python dependencies
-├── Dockerfile              # Container definition for future K8s deployment
-├── .dockerignore
-├── .gitignore
-└── README.md
+├── js-bot/
+│   ├── bot.js              # Entry point — slash commands, interaction routing
+│   ├── recorder.js         # Voice recording logic
+│   ├── postProcessor.js    # Spawns Python scripts; handles merge-audio & vectorize
+│   └── package.json
+└── py-process/
+    ├── process.py           # Orchestrator — runs transcribe → merge → vectorize
+    ├── transcribe.py        # Whisper transcription (per-user WAVs → .txt files)
+    ├── merge_audio.py       # Mix per-user WAVs → _session_mix.wav + .mp3
+    ├── vectorize.py         # Chunk + embed transcript → ChromaDB
+    ├── vectordb_helper.py   # CLI tool to inspect, search, and manage the vector DB
+    └── requirements.txt
 ```
 
 ---

@@ -13,22 +13,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - Config: `mp3_bitrate` (default `"128k"`) and `keep_wav` (default `true`) in `config.yaml`.
 - `mp3_bitrate` and `keep_wav` settings in `config.yaml` to control MP3 compression bitrate and WAV file retention.
 - `pydub>=0.25.1` added to `py-process/requirements.txt` (wraps `ffmpeg`, already a prerequisite).
-- `py-process/vectorize.py` — Transcript vectorization tool that chunks `_combined_transcript.txt` into configurable time-window segments, embeds each chunk via Ollama (`nomic-embed-text`), and persists the embeddings to a local ChromaDB vector database.
+- `py-process/vectorize.py` — transcript vectorization tool that chunks `_combined_transcript.txt` into configurable time-window segments, embeds each chunk via Ollama (`nomic-embed-text`), and persists the embeddings to a local ChromaDB vector database.
   - CLI: `python vectorize.py <session_name>` or `python vectorize.py --all` to process every session.
   - `--force` flag to re-index an already-vectorized session.
   - Stores all sessions in a single ChromaDB collection (`dnd_sessions`) with `session_name`, `start_time`, `end_time`, and `speakers` metadata for cross-session queries.
-- `config.yaml` — New vector DB and RAG settings: `vector_db_directory`, `embedding_model`, `chunk_minutes`, `ollama_base_url`.
-- `py-process/requirements.txt` — Added `chromadb` and `requests` dependencies for vectorization support.
-
-- `/mlx-ai transcribe start <session_name> [model] [language]` slash command — triggers Whisper transcription from Discord by spawning the Python script as a child process.
-- `/mlx-ai transcribe status` slash command — check if a transcription is currently running.
-- `js-bot/transcriber.js` — Transcriber module that manages the Python subprocess, enforces one-transcription-at-a-time, and posts results/errors back to Discord.
-- `py-process/transcribe.py` — Whisper-based transcription tool that reads per-user WAV files from a session folder and produces timestamped per-user transcripts plus a combined chronological transcript.
-  - CLI flags: `--model` (tiny/base/small/medium/large), `--language` (auto-detect by default).
-- `py-process/requirements.txt` — Python dependencies for the transcription pipeline.
-- Voice connection state-change and error logging in `recorder.js` for debugging connection issues.
-- `sodium-native` ^5.1.0 dependency — required by `@discordjs/voice` as the voice encryption backend.
-- `py-process/` directory — placeholder for the upcoming Whisper/MLX transcription pipeline.
+- `py-process/vectordb_helper.py` — CLI utility for inspecting, searching, and managing the ChromaDB vector database.
+  - `--list-sessions` — list all session names stored in the DB.
+  - `--session <name>` — filter summary or search results to a single session.
+  - `--search "<query>"` — semantic search via Ollama embeddings (requires Ollama running).
+  - `--limit <n>` — control the number of search results returned (default: 5).
+  - `--delete-session <name>` — remove all chunks for a specific session (prompts for confirmation).
+  - `--clear-all` — wipe the entire collection (prompts for confirmation).
+- `config.yaml` — new vector DB and RAG settings: `vector_db_directory`, `embedding_model`, `chunk_minutes`, `ollama_base_url`.
+- `py-process/requirements.txt` — added `chromadb` and `requests` dependencies for vectorization support.
+- `py-process/process.py` updated — orchestrator now runs all three steps in order: transcribe → merge audio → vectorize. Previously only ran transcription.
+- `/mlx-ai merge-audio start <session_name>` slash command — triggers `merge_audio.py` from Discord.
+- `/mlx-ai merge-audio status` slash command — reports whether an audio merge is in progress.
+- `/mlx-ai vectorize start <session_name|"all"> [force]` slash command — triggers `vectorize.py` from Discord. Pass `"all"` to process every session; `force` re-indexes already-vectorized sessions.
+- `/mlx-ai vectorize status` slash command — reports whether vectorization is in progress.
+- `js-bot/postProcessor.js` — added `mergeAudio`, `mergeAudioStatus`, `vectorize`, and `vectorizeStatus` methods. Each operation tracks its own running state independently so recording, merging, and vectorizing can be monitored separately.
+- Updated `README.md`, `js-bot/README.md`, and `py-process/README.md` with full documentation for all new scripts and slash commands.
 
 ### Moved
 

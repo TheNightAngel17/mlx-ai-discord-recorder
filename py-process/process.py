@@ -55,9 +55,11 @@ def main():
     )
     args = parser.parse_args()
 
-    # Resolve the path to transcribe.py (same directory as this script)
+    # Resolve paths to sibling scripts (same directory as this script)
     script_dir = Path(__file__).resolve().parent
     transcribe_script = script_dir / "transcribe.py"
+    merge_audio_script = script_dir / "merge_audio.py"
+    vectorize_script = script_dir / "vectorize.py"
 
     # -------------------------------------------------------------------
     # Step 1: Transcription
@@ -71,8 +73,19 @@ def main():
     run_step("Transcribe recordings", transcribe_cmd)
 
     # -------------------------------------------------------------------
+    # Step 2: Merge audio (mix per-user WAVs → _session_mix.wav + MP3)
+    # -------------------------------------------------------------------
+    merge_cmd = [sys.executable, str(merge_audio_script), args.session]
+    run_step("Merge audio tracks", merge_cmd)
+
+    # -------------------------------------------------------------------
+    # Step 3: Vectorize transcript (chunk, embed, store in ChromaDB)
+    # -------------------------------------------------------------------
+    vectorize_cmd = [sys.executable, str(vectorize_script), args.session]
+    run_step("Vectorize transcript", vectorize_cmd)
+
+    # -------------------------------------------------------------------
     # Future steps go here, e.g.:
-    #   run_step("Diarization", [...])
     #   run_step("Summarisation", [...])
     # -------------------------------------------------------------------
 

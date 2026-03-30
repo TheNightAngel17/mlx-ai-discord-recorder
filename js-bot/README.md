@@ -60,17 +60,42 @@ so this bot handles the voice recording while the Python transcription pipeline
 
 All commands are slash commands registered to the configured guild.
 
+### Recording
+
 | Command | Description |
 |---|---|
 | `/mlx-ai record start voice_channel:<channel> session_name:<name>` | Join the voice channel and start recording each user to a separate WAV file |
 | `/mlx-ai record stop` | Stop the active recording, save WAV files, and announce in the configured text channel |
 | `/mlx-ai record status` | Show the current session name, voice channel, elapsed duration, and number of humans being recorded |
 
+### Post-Processing (full pipeline)
+
+| Command | Description |
+|---|---|
+| `/mlx-ai post-process start session_name:<name> [model:<size>] [language:<code>]` | Run the full pipeline: transcribe → merge audio → vectorize |
+| `/mlx-ai post-process status` | Check if post-processing is currently running |
+
+### Audio Merge
+
+| Command | Description |
+|---|---|
+| `/mlx-ai merge-audio start session_name:<name>` | Mix all per-user WAV files into `_session_mix.wav` and `_session_mix.mp3` |
+| `/mlx-ai merge-audio status` | Check if an audio merge is currently running |
+
+### Vectorize
+
+| Command | Description |
+|---|---|
+| `/mlx-ai vectorize start session_name:<name\|"all"> [force:<true\|false>]` | Chunk and embed a session transcript into ChromaDB. Pass `"all"` to process every session |
+| `/mlx-ai vectorize status` | Check if vectorization is currently running |
+
 ### Behaviour
 
 - Each user's audio is saved to `<output_directory>/<YYYYMMDD_HHMMSS>_<session_name>/<username>.wav`
 - When the last human leaves the voice channel the recording stops automatically
 - When a human joins mid-session an announcement is sent to `announce_channel`
+- All Python scripts are spawned from `py-process/` using the `.venv` if present, falling back to system `python`
+- Only one post-processing, merge, or vectorize job can run at a time
 
 ---
 

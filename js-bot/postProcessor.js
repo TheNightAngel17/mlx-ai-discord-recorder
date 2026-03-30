@@ -22,6 +22,10 @@ class PostProcessor {
     this.isProcessing = false;
     this.currentSession = null;
     this.currentProcess = null;
+    this.isMerging = false;
+    this.mergeSession = null;
+    this.isVectorizing = false;
+    this.vectorizeSession = null;
   }
 
   /**
@@ -373,6 +377,263 @@ class PostProcessor {
 
     await interaction.reply({
       content: `Post-processing in progress for session \`${this.currentSession}\`…`,
+      ephemeral: true,
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // merge-audio
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Spawn merge_audio.py for a given session.
+   *
+   * @param {import('discord.js').ChatInputCommandInteraction} interaction
+   * @param {string} sessionName
+   */
+  async mergeAudio(interaction, sessionName) {
+    if (this.isMerging) {
+      await interaction.reply({
+        content: `⚠️ Audio merge already in progress for session \`${this.mergeSession}\`. Please wait.`,
+        ephemeral: true,
+      });
+      return;
+    }
+
+    const outputDir = this.config.output_directory || "./recordings";
+    const sessionDir = path.resolve(outputDir, sessionName);
+
+    if (!fs.existsSync(sessionDir)) {
+      await interaction.reply({
+        content: `❌ Session directory not found: \`${sessionName}\``,
+        ephemeral: true,
+      });
+      return;
+    }
+
+    const wavFiles = fs
+      .readdirSync(sessionDir)
+      .filter((f) => f.endsWith(".wav") && !f.startsWith("_"));
+    if (wavFiles.length === 0) {
+      await interaction.reply({
+        content: `❌ No per-user .wav files found in session \`${sessionName}\``,
+        ephemeral: true,
+      });
+      return;
+    }
+
+    await interaction.deferReply();
+
+    this.isMerging = true;
+    this.mergeSession = sessionName;
+
+    this.logger.info(`Audio merge started: session=${sessionName}, files=${wavFiles.length}`);
+
+    const repoRoot = path.resolve(__dirname, "..");
+    const scriptPath = path.join(repoRoot, "py-process", "merge_audio.py");
+
+    const venvPython = path.join(repoRoot, ".venv", "Scripts", "python.exe");
+    const venvPythonUnix = path.join(repoRoot, ".venv", "bin", "python");
+    let pythonExe = "python";
+    if (fs.existsSync(venvPython)) pythonExe = venvPython;
+    else if (fs.existsSync(venvPythonUnix)) pythonExe = venvPythonUnix;
+
+    return new Promise((resolve) => {
+      const proc = spawn(pythonExe, [scriptPath, sessionName], { cwd: repoRoot });
+
+      let stdout = "";
+      let stderr = "";
+
+      proc.stdout.on("data", (data) => {
+        const line = data.toString();
+        stdout += line;
+        for (const l of line.split("\n").filter((s) => s.trim())) {
+          this.logger.info(`[merge_audio] ${l}`);
+        }
+      });
+
+      proc.stderr.on("data", (data) => {
+        stderr += data.toString();
+      });
+
+      proc.on("close", async (code) => {
+        this.isMerging = false;
+        this.mergeSession = null;
+
+        if (code === 0) {
+          this.logger.info(`Audio merge finished for session ${sessionName}`);
+          const mp3Path = path.join(sessionDir, "_session_mix.mp3");
+          await interaction.editReply({
+            content: [
+              `✅ Audio merge complete for session \`${sessionName}\``,
+              `Output: \`${mp3Path}\``,
+            ].join("\n"),
+          });
+        } else {
+          this.logger.error(`Audio merge failed for session ${sessionName} (exit ${code}): ${stderr}`);
+          await interaction.editReply({
+            content: `❌ Audio merge failed for session \`${sessionName}\`.\n\`\`\`\n${stderr.slice(0, 1500) || "Unknown error"}\n\`\`\``,
+          });
+        }
+        resolve();
+      });
+
+      proc.on("error", async (err) => {
+        this.isMerging = false;
+        this.mergeSession = null;
+        this.logger.error(`Failed to spawn merge_audio: ${err.message}`);
+        await interaction.editReply({
+          content: `❌ Failed to start audio merge: ${err.message}`,
+        });
+        resolve();
+      });
+    });
+  }
+
+  /**
+   * Report current merge-audio status.
+   *
+   * @param {import('discord.js').ChatInputCommandInteraction} interaction
+   */
+  async mergeAudioStatus(interaction) {
+    if (!this.isMerging) {
+      await interaction.reply({ content: "No audio merge in progress.", ephemeral: true });
+      return;
+    }
+    await interaction.reply({
+      content: `⏳ Audio merge in progress for session \`${this.mergeSession}\`…`,
+      ephemeral: true,
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // vectorize
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Spawn vectorize.py for a given session (or all sessions).
+   *
+   * @param {import('discord.js').ChatInputCommandInteraction} interaction
+   * @param {string} sessionName  Session folder name, or the literal string "all"
+   * @param {boolean} force       Pass --force to re-index already-vectorized sessions
+   */
+  async vectorize(interaction, sessionName, force) {
+    if (this.isVectorizing) {
+      await interaction.reply({
+        content: `⚠️ Vectorization already in progress for \`${this.vectorizeSession}\`. Please wait.`,
+        ephemeral: true,
+      });
+      return;
+    }
+
+    const isAll = sessionName.toLowerCase() === "all";
+
+    if (!isAll) {
+      const outputDir = this.config.output_directory || "./recordings";
+      const sessionDir = path.resolve(outputDir, sessionName);
+      if (!fs.existsSync(sessionDir)) {
+        await interaction.reply({
+          content: `❌ Session directory not found: \`${sessionName}\``,
+          ephemeral: true,
+        });
+        return;
+      }
+
+      const combinedPath = path.join(sessionDir, "_combined_transcript.txt");
+      if (!fs.existsSync(combinedPath)) {
+        await interaction.reply({
+          content: `❌ No \`_combined_transcript.txt\` found in \`${sessionName}\`. Run transcription first.`,
+          ephemeral: true,
+        });
+        return;
+      }
+    }
+
+    await interaction.deferReply();
+
+    this.isVectorizing = true;
+    this.vectorizeSession = isAll ? "(all sessions)" : sessionName;
+
+    this.logger.info(`Vectorization started: target=${this.vectorizeSession}, force=${force}`);
+
+    const repoRoot = path.resolve(__dirname, "..");
+    const scriptPath = path.join(repoRoot, "py-process", "vectorize.py");
+
+    const venvPython = path.join(repoRoot, ".venv", "Scripts", "python.exe");
+    const venvPythonUnix = path.join(repoRoot, ".venv", "bin", "python");
+    let pythonExe = "python";
+    if (fs.existsSync(venvPython)) pythonExe = venvPython;
+    else if (fs.existsSync(venvPythonUnix)) pythonExe = venvPythonUnix;
+
+    const args = [scriptPath];
+    if (isAll) {
+      args.push("--all");
+    } else {
+      args.push(sessionName);
+    }
+    if (force) args.push("--force");
+
+    return new Promise((resolve) => {
+      const proc = spawn(pythonExe, args, { cwd: repoRoot });
+
+      let stdout = "";
+      let stderr = "";
+
+      proc.stdout.on("data", (data) => {
+        const line = data.toString();
+        stdout += line;
+        for (const l of line.split("\n").filter((s) => s.trim())) {
+          this.logger.info(`[vectorize] ${l}`);
+        }
+      });
+
+      proc.stderr.on("data", (data) => {
+        stderr += data.toString();
+      });
+
+      proc.on("close", async (code) => {
+        this.isVectorizing = false;
+        this.vectorizeSession = null;
+
+        if (code === 0) {
+          this.logger.info(`Vectorization finished for ${isAll ? "all sessions" : sessionName}`);
+          const target = isAll ? "all sessions" : `session \`${sessionName}\``;
+          await interaction.editReply({
+            content: `✅ Vectorization complete for ${target}.\nData stored in \`${this.config.vector_db_directory || "./vectordb"}\``,
+          });
+        } else {
+          this.logger.error(`Vectorization failed (exit ${code}): ${stderr}`);
+          await interaction.editReply({
+            content: `❌ Vectorization failed.\n\`\`\`\n${stderr.slice(0, 1500) || "Unknown error"}\n\`\`\``,
+          });
+        }
+        resolve();
+      });
+
+      proc.on("error", async (err) => {
+        this.isVectorizing = false;
+        this.vectorizeSession = null;
+        this.logger.error(`Failed to spawn vectorize: ${err.message}`);
+        await interaction.editReply({
+          content: `❌ Failed to start vectorization: ${err.message}`,
+        });
+        resolve();
+      });
+    });
+  }
+
+  /**
+   * Report current vectorization status.
+   *
+   * @param {import('discord.js').ChatInputCommandInteraction} interaction
+   */
+  async vectorizeStatus(interaction) {
+    if (!this.isVectorizing) {
+      await interaction.reply({ content: "No vectorization in progress.", ephemeral: true });
+      return;
+    }
+    await interaction.reply({
+      content: `⏳ Vectorization in progress for \`${this.vectorizeSession}\`…`,
       ephemeral: true,
     });
   }

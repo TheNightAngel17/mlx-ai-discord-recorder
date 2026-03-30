@@ -105,20 +105,89 @@ D:/mlx-ai-recordings/20260330_033020_test/
 
 ---
 
+## `process.py` — Full Pipeline Orchestrator
+
+Runs all post-processing steps in the correct order for a single session:
+
+1. **Transcribe** — `transcribe.py` → per-user `.txt` files + `_combined_transcript.txt`
+2. **Merge audio** — `merge_audio.py` → `_session_mix.wav` + `_session_mix.mp3`
+3. **Vectorize** — `vectorize.py` → chunks embedded and stored in ChromaDB
+
+This is the script the JS bot calls when you use `/mlx-ai post-process start`.
+
+### Usage
+
+```bash
+# Run all steps with defaults from config.yaml
+python process.py 20260330_033020_test
+
+# Override the Whisper model
+python process.py 20260330_033020_test --model medium
+
+# Override model and language
+python process.py 20260330_033020_test --model large --language en
+```
+
+If any step fails, the pipeline halts immediately and exits with a non-zero code.
+
+---
+
+---
+
 ## `merge_audio.py` — Mix and Compress Session Audio
 
 Overlays all per-user WAV files into a single combined recording, then exports
-the mix as a compressed MP3.
+the mix as both a WAV and a compressed MP3.
 
 ### What it does
 
-1. Loads every `<username>.wav` in the session directory.
-2. **Mixes** them together (all users start at time zero — same as the recording start).
-3. Exports the mixed audio as `_session_mix.wav` and `_session_mix.mp3`.
-4. Optionally deletes the original WAV files (controlled by `keep_wav` in `config.yaml`).
-## Vectorizing Transcripts (`vectorize.py`)
+1. Loads every `<username>.wav` in the session directory (skipping `_` prefixed files).
+2. **Mixes** them together — all users start at time zero, matching the recording start.
+3. Exports the combined audio as `_session_mix.wav` and `_session_mix.mp3`.
+4. Optionally deletes the original per-user WAV files (controlled by `keep_wav` in `config.yaml`).
 
-`vectorize.py` chunks the combined transcript into time-window segments, embeds each chunk via [Ollama](https://ollama.com/), and persists the embeddings in a local [ChromaDB](https://www.trychroma.com/) vector database — ready for downstream RAG queries.
+### Prerequisites
+
+- `ffmpeg` on your `PATH` (same requirement as Whisper)
+- `pydub` — included in `requirements.txt`
+
+### Config options (`config.yaml`)
+
+| Key | Default | Description |
+|---|---|---|
+| `mp3_bitrate` | `"128k"` | MP3 bitrate (e.g. `"64k"`, `"128k"`, `"192k"`, `"320k"`) |
+| `keep_wav` | `true` | Keep original per-user WAV files after MP3 conversion |
+
+### Usage
+
+```bash
+python merge_audio.py <session_name>
+```
+
+**Example:**
+
+```bash
+python merge_audio.py 20260330_033020_test
+```
+
+### Expected output
+
+```
+D:/mlx-ai-recordings/20260330_033020_test/
+├── thenightangel17.wav          # kept if keep_wav: true
+├── someotheruser.wav            # kept if keep_wav: true
+├── _session_mix.wav             # NEW — all users mixed together
+└── _session_mix.mp3             # NEW — compressed combined audio
+```
+
+---
+
+## `vectorize.py` — Embed Transcripts into ChromaDB
+
+Chunks `_combined_transcript.txt` into time-window segments, embeds each chunk
+via [Ollama](https://ollama.com/), and persists the embeddings in a local
+[ChromaDB](https://www.trychroma.com/) vector database — ready for downstream
+RAG queries.
 
 ### Prerequisites
 
@@ -133,47 +202,20 @@ the mix as a compressed MP3.
    pip install -r requirements.txt
    ```
 
-3. A completed transcription session (i.e. `_combined_transcript.txt` must exist in the session folder).
+3. A completed transcription run — `_combined_transcript.txt` must exist in the session folder.
 
 ### Config options (`config.yaml`)
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `vector_db_directory` | `D:/mlx-ai-vectordb` | Directory where ChromaDB persists its data files |
+| `vector_db_directory` | `D:/mlx-ai-vectordb` | Directory where ChromaDB persists its data |
 | `embedding_model` | `nomic-embed-text` | Ollama embedding model name |
-| `chunk_minutes` | `3` | Time-window size (in minutes) for grouping transcript lines into chunks |
+| `chunk_minutes` | `3` | Time-window size (minutes) for grouping transcript lines into chunks |
 | `ollama_base_url` | `http://localhost:11434` | Base URL of your Ollama server |
 
 ### Usage
 
 ```bash
-python merge_audio.py <session_name>
-```
-
-**Example:**
-
-```bash
-python merge_audio.py 20260330_033020_test
-```
-
-### Config options (`config.yaml`)
-
-| Key | Default | Description |
-|---|---|---|
-| `mp3_bitrate` | `"128k"` | MP3 bitrate (e.g. `"64k"`, `"128k"`, `"192k"`, `"320k"`) |
-| `keep_wav` | `true` | Keep original WAV files after MP3 conversion |
-
-### Expected output
-
-```
-D:/mlx-ai-recordings/20260330_033020_test/
-├── thenightangel17.wav          # kept if keep_wav: true
-├── someotheruser.wav            # kept if keep_wav: true
-├── _session_mix.wav             # NEW — all users combined
-└── _session_mix.mp3             # NEW — compressed combined audio
-```
-
-> **Note:** `pydub` requires `ffmpeg` to be installed and on your `PATH` — the same prerequisite as Whisper.
 # Vectorize a single session
 python vectorize.py 20260330_033020_test
 
@@ -198,34 +240,79 @@ Sessions:  1
 Session: 20260330_033020_test
   Transcript: 42 lines -> 5 chunks (3.0-min windows)
   Embedding chunk 1/5... done (0.3s)
-  Embedding chunk 2/5... done (0.3s)
-  Embedding chunk 3/5... done (0.3s)
-  Embedding chunk 4/5... done (0.3s)
-  Embedding chunk 5/5... done (0.3s)
+  ...
   Stored 5 chunks in ChromaDB collection 'dnd_sessions'.
 
 Done.
 ```
 
-### Verifying stored data
+---
 
-```python
-import chromadb
+## `vectordb_helper.py` — Inspect and Manage the Vector Database
 
-# Use the same path as vector_db_directory in config.yaml
-client = chromadb.PersistentClient(path="D:/mlx-ai-vectordb")
-collection = client.get_collection("dnd_sessions")
+A CLI tool for inspecting, searching, and managing the ChromaDB collection.
+Useful for verifying what has been vectorized, doing quick semantic searches,
+and cleaning up test data.
 
-# Count all stored chunks
-print(collection.count())
+### Usage
 
-# Query by text similarity
-results = collection.query(
-    query_texts=["What happened at the cave entrance?"],
-    n_results=3,
-)
-for doc, meta in zip(results["documents"][0], results["metadatas"][0]):
-    print(f"[{meta['session_name']}] {meta['start_time']:.0f}s–{meta['end_time']:.0f}s — {meta['speakers']}")
-    print(doc[:200])
-    print()
+```bash
+# Summary of all sessions (chunks, time span, speakers)
+python vectordb_helper.py
+
+# Summary for a single session
+python vectordb_helper.py --session 20260330_033020_test
+
+# List session names only
+python vectordb_helper.py --list-sessions
+
+# Semantic search across all sessions (requires Ollama running)
+python vectordb_helper.py --search "what happened at the cave entrance"
+
+# Semantic search within a specific session
+python vectordb_helper.py --search "who found the treasure" --session 20260330_033020_test
+
+# Return more results
+python vectordb_helper.py --search "dragon attack" --limit 10
+
+# Delete all chunks for a single session (prompts for confirmation)
+python vectordb_helper.py --delete-session 20260330_033020_test
+
+# Wipe the entire collection (prompts for confirmation)
+python vectordb_helper.py --clear-all
 ```
+
+### Example summary output
+
+```
+Vector DB : D:/mlx-ai-vectordb
+Collection: dnd_sessions
+
+Total chunks in DB: 5
+Sessions stored: 1
+
+  Session : 20260330_033020_test
+  Chunks  : 5
+  Span    : 00:00:00.00 → 00:14:32.80
+  Speakers: playerone, thenightangel17
+```
+
+### Example search output
+
+```
+Embedding query via Ollama (nomic-embed-text)...
+
+Top 3 result(s) for: "cave entrance"
+
+============================================================
+[1] 20260330_033020_test__chunk_0002
+    Session : 20260330_033020_test
+    Time    : 00:06:00.00 → 00:09:00.00
+    Speakers: thenightangel17, playerone
+    Distance: 142.3401
+    Text    :
+      thenightangel17: We approach the cave entrance carefully.
+      playerone: I cast detect magic on the doorway.
+```
+
+> **Note:** Lower `Distance` values indicate more relevant results. The raw distance is an L2 (Euclidean) distance from ChromaDB — not a percentage score.

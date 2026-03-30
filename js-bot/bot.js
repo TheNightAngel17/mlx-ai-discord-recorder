@@ -161,6 +161,64 @@ const commands = [
             .setDescription("Check if post-processing is currently running")
         )
     )
+    .addSubcommandGroup(
+      new SlashCommandSubcommandGroupBuilder()
+        .setName("merge-audio")
+        .setDescription("Audio merge commands")
+        .addSubcommand(
+          new SlashCommandSubcommandBuilder()
+            .setName("start")
+            .setDescription(
+              "Mix per-user WAV recordings into a combined session MP3"
+            )
+            .addStringOption((opt) =>
+              opt
+                .setName("session_name")
+                .setDescription(
+                  "The session folder name (e.g. 20260330_033020_test)"
+                )
+                .setRequired(true)
+            )
+        )
+        .addSubcommand(
+          new SlashCommandSubcommandBuilder()
+            .setName("status")
+            .setDescription("Check if an audio merge is currently running")
+        )
+    )
+    .addSubcommandGroup(
+      new SlashCommandSubcommandGroupBuilder()
+        .setName("vectorize")
+        .setDescription("Vector database commands")
+        .addSubcommand(
+          new SlashCommandSubcommandBuilder()
+            .setName("start")
+            .setDescription(
+              "Chunk, embed, and store a session transcript into ChromaDB"
+            )
+            .addStringOption((opt) =>
+              opt
+                .setName("session_name")
+                .setDescription(
+                  'Session name, or "all" to process every session'
+                )
+                .setRequired(true)
+            )
+            .addBooleanOption((opt) =>
+              opt
+                .setName("force")
+                .setDescription(
+                  "Re-index even if the session has already been vectorized"
+                )
+                .setRequired(false)
+            )
+        )
+        .addSubcommand(
+          new SlashCommandSubcommandBuilder()
+            .setName("status")
+            .setDescription("Check if vectorization is currently running")
+        )
+    )
     .toJSON(),
 ];
 
@@ -227,6 +285,21 @@ client.on("interactionCreate", async (interaction) => {
       await postProcessor.postProcess(interaction, sessionName, model, language);
     } else if (sub === "status") {
       await postProcessor.status(interaction);
+    }
+  } else if (group === "merge-audio") {
+    if (sub === "start") {
+      const sessionName = interaction.options.getString("session_name");
+      await postProcessor.mergeAudio(interaction, sessionName);
+    } else if (sub === "status") {
+      await postProcessor.mergeAudioStatus(interaction);
+    }
+  } else if (group === "vectorize") {
+    if (sub === "start") {
+      const sessionName = interaction.options.getString("session_name");
+      const force = interaction.options.getBoolean("force") ?? false;
+      await postProcessor.vectorize(interaction, sessionName, force);
+    } else if (sub === "status") {
+      await postProcessor.vectorizeStatus(interaction);
     }
   }
 });
