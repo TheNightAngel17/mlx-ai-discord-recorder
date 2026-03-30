@@ -3,3 +3,4 @@
 # Core
 PyYAML>=6.0
 openai-whisper>=20231117    # OpenAI Whisper for speech-to-text transcription
+pydub>=0.25.1               # Audio mixing and MP3 compression (requires ffmpeg)

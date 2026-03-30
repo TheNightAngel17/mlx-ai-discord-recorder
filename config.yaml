@@ -10,6 +10,10 @@ output_directory: D:/mlx-ai-recordings
 # Examples: "bot-commands", "general", "dnd-bot"
 announce_channel: "bot-commands"
 
+# Audio merge and compression settings
+mp3_bitrate: "128k"     # MP3 bitrate for compression (e.g. "64k", "128k", "192k", "320k")
+keep_wav: true           # Whether to keep original WAV files after MP3 conversion
+
 # Whisper transcription defaults.
 # These are used when the /mlx-ai transcribe start command is run
 # without specifying --model or --language.

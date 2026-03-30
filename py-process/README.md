@@ -92,7 +92,7 @@ python transcribe.py 20260330_033020_test --model small --language en
 
 ## Output
 
-After running, the session folder will contain:
+After running `transcribe.py`, the session folder will contain:
 
 ```
 D:/mlx-ai-recordings/20260330_033020_test/
@@ -102,3 +102,51 @@ D:/mlx-ai-recordings/20260330_033020_test/
 ├── someotheruser.txt
 └── _combined_transcript.txt           # all users merged by timestamp
 ```
+
+---
+
+## `merge_audio.py` — Mix and Compress Session Audio
+
+Overlays all per-user WAV files into a single combined recording, then exports
+compressed MP3s for both the mix and each individual user.
+
+### What it does
+
+1. Loads every `<username>.wav` in the session directory.
+2. **Mixes** them together (all users start at time zero — same as the recording start).
+3. **Compresses** each per-user WAV to `<username>.mp3` at the configured bitrate.
+4. Exports the mixed audio as `_session_mix.wav` and `_session_mix.mp3`.
+5. Optionally deletes the original WAV files (controlled by `keep_wav` in `config.yaml`).
+
+### Usage
+
+```bash
+python merge_audio.py <session_name>
+```
+
+**Example:**
+
+```bash
+python merge_audio.py 20260330_033020_test
+```
+
+### Config options (`config.yaml`)
+
+| Key | Default | Description |
+|---|---|---|
+| `mp3_bitrate` | `"128k"` | MP3 bitrate (e.g. `"64k"`, `"128k"`, `"192k"`, `"320k"`) |
+| `keep_wav` | `true` | Keep original WAV files after MP3 conversion |
+
+### Expected output
+
+```
+D:/mlx-ai-recordings/20260330_033020_test/
+├── thenightangel17.wav          # kept if keep_wav: true
+├── thenightangel17.mp3          # NEW — compressed per-user audio
+├── someotheruser.wav            # kept if keep_wav: true
+├── someotheruser.mp3            # NEW — compressed per-user audio
+├── _session_mix.wav             # NEW — all users combined
+└── _session_mix.mp3             # NEW — compressed combined audio
+```
+
+> **Note:** `pydub` requires `ffmpeg` to be installed and on your `PATH` — the same prerequisite as Whisper.
