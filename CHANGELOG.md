@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- `py-process/merge_audio.py` — new CLI script that mixes all per-user WAV recordings for a session into a single `_session_mix.wav` (all users overlaid at time zero), then compresses the mix and each individual recording to MP3.
+- `py-process/merge_audio.py` — new CLI script that mixes all per-user WAV recordings for a session into a single `_session_mix.wav` (all users overlaid at time zero), then compresses the combined mix to `_session_mix.mp3`.
   - Usage: `python merge_audio.py <session_name>`
   - Config: `mp3_bitrate` (default `"128k"`) and `keep_wav` (default `true`) in `config.yaml`.
 - `mp3_bitrate` and `keep_wav` settings in `config.yaml` to control MP3 compression bitrate and WAV file retention.

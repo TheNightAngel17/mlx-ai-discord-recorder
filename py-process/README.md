@@ -108,15 +108,14 @@ D:/mlx-ai-recordings/20260330_033020_test/
 ## `merge_audio.py` — Mix and Compress Session Audio
 
 Overlays all per-user WAV files into a single combined recording, then exports
-compressed MP3s for both the mix and each individual user.
+the mix as a compressed MP3.
 
 ### What it does
 
 1. Loads every `<username>.wav` in the session directory.
 2. **Mixes** them together (all users start at time zero — same as the recording start).
-3. **Compresses** each per-user WAV to `<username>.mp3` at the configured bitrate.
-4. Exports the mixed audio as `_session_mix.wav` and `_session_mix.mp3`.
-5. Optionally deletes the original WAV files (controlled by `keep_wav` in `config.yaml`).
+3. Exports the mixed audio as `_session_mix.wav` and `_session_mix.mp3`.
+4. Optionally deletes the original WAV files (controlled by `keep_wav` in `config.yaml`).
 
 ### Usage
 
@@ -142,9 +141,7 @@ python merge_audio.py 20260330_033020_test
 ```
 D:/mlx-ai-recordings/20260330_033020_test/
 ├── thenightangel17.wav          # kept if keep_wav: true
-├── thenightangel17.mp3          # NEW — compressed per-user audio
 ├── someotheruser.wav            # kept if keep_wav: true
-├── someotheruser.mp3            # NEW — compressed per-user audio
 ├── _session_mix.wav             # NEW — all users combined
 └── _session_mix.mp3             # NEW — compressed combined audio
 ```

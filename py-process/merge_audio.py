@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-merge_audio.py — Mix and compress per-user WAV recordings from a session folder.
+merge_audio.py — Mix per-user WAV recordings and export the combined session as MP3.
 
 Overlays all per-user WAV files into a single combined session recording, then
-exports compressed MP3s for both the combined mix and each individual user.
+exports the mix as both a WAV and a compressed MP3.
 
 Usage:
     python merge_audio.py <session_name>
@@ -88,7 +88,7 @@ def main():
     print(f"Files:    {len(wav_files)} WAV file(s)")
     print()
 
-    # Load and compress each per-user WAV → MP3
+    # Load each per-user WAV
     segments: list[AudioSegment] = []
     for wav_path in wav_files:
         username = wav_path.stem
@@ -96,11 +96,6 @@ def main():
         seg = load_wav(wav_path)
         segments.append(seg)
         print(f"done ({len(seg) / 1000:.1f}s)")
-
-        mp3_path = session_dir / f"{username}.mp3"
-        print(f"  Compressing -> {mp3_path.name}...", end=" ", flush=True)
-        export_mp3(seg, mp3_path, mp3_bitrate)
-        print("done")
 
         if not keep_wav:
             wav_path.unlink()
