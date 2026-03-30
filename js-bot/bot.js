@@ -26,7 +26,7 @@ const {
   SlashCommandSubcommandBuilder,
 } = require("discord.js");
 const { Recorder } = require("./recorder");
-const { Transcriber } = require("./transcriber");
+const { PostProcessor } = require("./postProcessor");
 
 // ---------------------------------------------------------------------------
 // Logging helper — matches Python bot format: YYYY-MM-DD HH:MM:SS [LEVEL] module: message
@@ -119,12 +119,12 @@ const commands = [
     )
     .addSubcommandGroup(
       new SlashCommandSubcommandGroupBuilder()
-        .setName("transcribe")
-        .setDescription("Whisper transcription commands")
+        .setName("post-process")
+        .setDescription("Post-processing commands")
         .addSubcommand(
           new SlashCommandSubcommandBuilder()
             .setName("start")
-            .setDescription("Transcribe WAV files from a recording session")
+            .setDescription("Run post-processing on a recording session")
             .addStringOption((opt) =>
               opt
                 .setName("session_name")
@@ -158,7 +158,7 @@ const commands = [
         .addSubcommand(
           new SlashCommandSubcommandBuilder()
             .setName("status")
-            .setDescription("Check if a transcription is currently running")
+            .setDescription("Check if post-processing is currently running")
         )
     )
     .toJSON(),
@@ -178,7 +178,7 @@ const client = new Client({
 });
 
 const recorder = new Recorder(config, makeLogger("recorder"));
-const transcriber = new Transcriber(config, makeLogger("transcriber"));
+const postProcessor = new PostProcessor(config, makeLogger("postProcessor"));
 
 // ---------------------------------------------------------------------------
 // Register guild commands on startup
@@ -217,16 +217,16 @@ client.on("interactionCreate", async (interaction) => {
     } else if (sub === "status") {
       await recorder.status(interaction);
     }
-  } else if (group === "transcribe") {
+  } else if (group === "post-process") {
     if (sub === "start") {
       const sessionName = interaction.options.getString("session_name");
       const defaultModel = config.whisper_model || "base";
       const defaultLang = config.whisper_language === "auto" ? null : (config.whisper_language || null);
       const model = interaction.options.getString("model") || defaultModel;
       const language = interaction.options.getString("language") || defaultLang;
-      await transcriber.transcribe(interaction, sessionName, model, language);
+      await postProcessor.postProcess(interaction, sessionName, model, language);
     } else if (sub === "status") {
-      await transcriber.status(interaction);
+      await postProcessor.status(interaction);
     }
   }
 });

@@ -1,8 +1,8 @@
 /**
- * transcriber.js — Spawns the Python Whisper transcription script and reports results.
+ * postProcessor.js — Spawns the Python post-processing orchestrator and reports results.
  *
- * Exports a Transcriber class with:
- *   transcribe(interaction, sessionName, model, language) — run transcription
+ * Exports a PostProcessor class with:
+ *   postProcess(interaction, sessionName, model, language) — run post-processing
  */
 
 "use strict";
@@ -11,7 +11,7 @@ const { spawn } = require("child_process");
 const path = require("path");
 const fs = require("fs");
 
-class Transcriber {
+class PostProcessor {
   /**
    * @param {object} config   Parsed config.yaml object
    * @param {object} logger   Logger with .info / .warn / .error methods
@@ -19,24 +19,24 @@ class Transcriber {
   constructor(config, logger) {
     this.config = config;
     this.logger = logger;
-    this.isTranscribing = false;
+    this.isProcessing = false;
     this.currentSession = null;
     this.currentProcess = null;
   }
 
   /**
-   * Run the Python transcription script for a given session.
+   * Run the Python post-processing script for a given session.
    *
    * @param {import('discord.js').ChatInputCommandInteraction} interaction
    * @param {string} sessionName
    * @param {string} model        Whisper model size (tiny|base|small|medium|large)
    * @param {string|null} language Language code or null for auto-detect
    */
-  async transcribe(interaction, sessionName, model, language) {
-    // Guard: only one transcription at a time
-    if (this.isTranscribing) {
+  async postProcess(interaction, sessionName, model, language) {
+    // Guard: only one post-processing run at a time
+    if (this.isProcessing) {
       await interaction.reply({
-        content: `A transcription is already in progress for session \`${this.currentSession}\`. Please wait for it to finish.`,
+        content: `Post-processing is already in progress for session \`${this.currentSession}\`. Please wait for it to finish.`,
         ephemeral: true,
       });
       return;
@@ -66,19 +66,19 @@ class Transcriber {
       return;
     }
 
-    // Defer — transcription can take a while
+    // Defer — post-processing can take a while
     await interaction.deferReply();
 
-    this.isTranscribing = true;
+    this.isProcessing = true;
     this.currentSession = sessionName;
 
     this.logger.info(
-      `Transcription started: session=${sessionName}, model=${model}, language=${language || "auto"}, files=${wavFiles.length}`
+      `Post-processing started: session=${sessionName}, model=${model}, language=${language || "auto"}, files=${wavFiles.length}`
     );
 
     // Resolve paths
     const repoRoot = path.resolve(__dirname, "..");
-    const scriptPath = path.join(repoRoot, "py-process", "transcribe.py");
+    const scriptPath = path.join(repoRoot, "py-process", "process.py");
 
     // Find the Python executable — prefer the venv, fall back to system python
     const venvPython = path.join(repoRoot, ".venv", "Scripts", "python.exe");
@@ -100,7 +100,7 @@ class Transcriber {
     const announceChannel = await this._getAnnounceChannel(interaction.guild);
     if (announceChannel) {
       await announceChannel.send(
-        `Transcription started for session \`${sessionName}\` (model: ${model}, language: ${language || "auto-detect"}, ${wavFiles.length} file(s))`
+        `Post-processing started for session \`${sessionName}\` (model: ${model}, language: ${language || "auto-detect"}, ${wavFiles.length} file(s))`
       );
     }
 
@@ -116,7 +116,7 @@ class Transcriber {
         stdout += line;
         // Log each line for real-time visibility in the terminal
         for (const l of line.split("\n").filter((s) => s.trim())) {
-          this.logger.info(`[whisper] ${l}`);
+          this.logger.info(`[process] ${l}`);
         }
       });
 
@@ -125,13 +125,13 @@ class Transcriber {
       });
 
       proc.on("close", async (code) => {
-        this.isTranscribing = false;
+        this.isProcessing = false;
         this.currentSession = null;
         this.currentProcess = null;
 
         if (code === 0) {
           this.logger.info(
-            `Transcription finished successfully for session ${sessionName}`
+            `Post-processing finished successfully for session ${sessionName}`
           );
 
           // Read the combined transcript (if it exists) for the reply
@@ -151,7 +151,7 @@ class Transcriber {
           }
 
           const replyContent = [
-            `✅ Transcription complete for session \`${sessionName}\``,
+            `✅ Post-processing complete for session \`${sessionName}\``,
             `Files saved to \`${sessionDir}\``,
           ];
 
@@ -165,21 +165,21 @@ class Transcriber {
 
           if (announceChannel) {
             await announceChannel.send(
-              `✅ Transcription complete for session \`${sessionName}\` — files saved to \`${sessionDir}\``
+              `✅ Post-processing complete for session \`${sessionName}\` — files saved to \`${sessionDir}\``
             );
           }
         } else {
           this.logger.error(
-            `Transcription failed for session ${sessionName} (exit code ${code}): ${stderr}`
+            `Post-processing failed for session ${sessionName} (exit code ${code}): ${stderr}`
           );
 
           await interaction.editReply({
-            content: `❌ Transcription failed for session \`${sessionName}\`.\n\`\`\`\n${stderr.slice(0, 1500) || "Unknown error"}\n\`\`\``,
+            content: `❌ Post-processing failed for session \`${sessionName}\`.\n\`\`\`\n${stderr.slice(0, 1500) || "Unknown error"}\n\`\`\``,
           });
 
           if (announceChannel) {
             await announceChannel.send(
-              `❌ Transcription failed for session \`${sessionName}\``
+              `❌ Post-processing failed for session \`${sessionName}\``
             );
           }
         }
@@ -188,16 +188,16 @@ class Transcriber {
       });
 
       proc.on("error", async (err) => {
-        this.isTranscribing = false;
+        this.isProcessing = false;
         this.currentSession = null;
         this.currentProcess = null;
 
         this.logger.error(
-          `Failed to spawn transcription process: ${err.message}`
+          `Failed to spawn post-processing process: ${err.message}`
         );
 
         await interaction.editReply({
-          content: `❌ Failed to start transcription: ${err.message}`,
+          content: `❌ Failed to start post-processing: ${err.message}`,
         });
 
         resolve();
@@ -206,21 +206,21 @@ class Transcriber {
   }
 
   /**
-   * Reply with current transcription status.
+   * Reply with current post-processing status.
    *
    * @param {import('discord.js').ChatInputCommandInteraction} interaction
    */
   async status(interaction) {
-    if (!this.isTranscribing) {
+    if (!this.isProcessing) {
       await interaction.reply({
-        content: "No transcription in progress.",
+        content: "No post-processing in progress.",
         ephemeral: true,
       });
       return;
     }
 
     await interaction.reply({
-      content: `Transcription in progress for session \`${this.currentSession}\`…`,
+      content: `Post-processing in progress for session \`${this.currentSession}\`…`,
       ephemeral: true,
     });
   }
@@ -240,4 +240,4 @@ class Transcriber {
   }
 }
 
-module.exports = { Transcriber };
+module.exports = { PostProcessor };
