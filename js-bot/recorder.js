@@ -407,16 +407,17 @@ class Recorder {
 
     // Announce
     const relPath = path.join(outputDir, sessionName || "");
+    const transcribeHint = `\nTo transcribe, run:\n\`/mlx-ai transcribe start session_name:${sessionName}\``;
     if (guild) {
       const announceChannel = await this._getAnnounceChannel(guild);
       if (announceChannel) {
         if (auto) {
           await announceChannel.send(
-            `Recording automatically stopped (channel empty). Files saved to \`${relPath}\``
+            `Recording automatically stopped (channel empty). Files saved to \`${relPath}\`${transcribeHint}`
           );
         } else {
           await announceChannel.send(
-            `Recording stopped — files saved to \`${relPath}\``
+            `Recording stopped — files saved to \`${relPath}\`${transcribeHint}`
           );
         }
       }
