@@ -26,6 +26,7 @@ const {
   SlashCommandSubcommandBuilder,
 } = require("discord.js");
 const { Recorder } = require("./recorder");
+const { Transcriber } = require("./transcriber");
 
 // ---------------------------------------------------------------------------
 // Logging helper — matches Python bot format: YYYY-MM-DD HH:MM:SS [LEVEL] module: message
@@ -116,6 +117,50 @@ const commands = [
             .setDescription("Show the status of the current recording session")
         )
     )
+    .addSubcommandGroup(
+      new SlashCommandSubcommandGroupBuilder()
+        .setName("transcribe")
+        .setDescription("Whisper transcription commands")
+        .addSubcommand(
+          new SlashCommandSubcommandBuilder()
+            .setName("start")
+            .setDescription("Transcribe WAV files from a recording session")
+            .addStringOption((opt) =>
+              opt
+                .setName("session_name")
+                .setDescription(
+                  "The session folder name (e.g. 20260330_033020_test)"
+                )
+                .setRequired(true)
+            )
+            .addStringOption((opt) =>
+              opt
+                .setName("model")
+                .setDescription("Whisper model size (default: base)")
+                .setRequired(false)
+                .addChoices(
+                  { name: "tiny", value: "tiny" },
+                  { name: "base", value: "base" },
+                  { name: "small", value: "small" },
+                  { name: "medium", value: "medium" },
+                  { name: "large", value: "large" }
+                )
+            )
+            .addStringOption((opt) =>
+              opt
+                .setName("language")
+                .setDescription(
+                  "Language code (e.g. 'en'). Omit for auto-detect."
+                )
+                .setRequired(false)
+            )
+        )
+        .addSubcommand(
+          new SlashCommandSubcommandBuilder()
+            .setName("status")
+            .setDescription("Check if a transcription is currently running")
+        )
+    )
     .toJSON(),
 ];
 
@@ -133,6 +178,7 @@ const client = new Client({
 });
 
 const recorder = new Recorder(config, makeLogger("recorder"));
+const transcriber = new Transcriber(config, makeLogger("transcriber"));
 
 // ---------------------------------------------------------------------------
 // Register guild commands on startup
@@ -161,16 +207,25 @@ client.on("interactionCreate", async (interaction) => {
   const group = interaction.options.getSubcommandGroup(false);
   const sub = interaction.options.getSubcommand(false);
 
-  if (group !== "record") return;
-
-  if (sub === "start") {
-    const voiceChannel = interaction.options.getChannel("voice_channel");
-    const sessionName = interaction.options.getString("session_name");
-    await recorder.start(interaction, voiceChannel, sessionName);
-  } else if (sub === "stop") {
-    await recorder.stop(interaction);
-  } else if (sub === "status") {
-    await recorder.status(interaction);
+  if (group === "record") {
+    if (sub === "start") {
+      const voiceChannel = interaction.options.getChannel("voice_channel");
+      const sessionName = interaction.options.getString("session_name");
+      await recorder.start(interaction, voiceChannel, sessionName);
+    } else if (sub === "stop") {
+      await recorder.stop(interaction);
+    } else if (sub === "status") {
+      await recorder.status(interaction);
+    }
+  } else if (group === "transcribe") {
+    if (sub === "start") {
+      const sessionName = interaction.options.getString("session_name");
+      const model = interaction.options.getString("model") || "base";
+      const language = interaction.options.getString("language") || null;
+      await transcriber.transcribe(interaction, sessionName, model, language);
+    } else if (sub === "status") {
+      await transcriber.status(interaction);
+    }
   }
 });
 
