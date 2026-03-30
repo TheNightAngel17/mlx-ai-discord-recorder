@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `py-transcribe/transcribe.py` — Whisper-based transcription tool that reads per-user WAV files from a session folder and produces timestamped per-user transcripts plus a combined chronological transcript.
+  - CLI flags: `--model` (tiny/base/small/medium/large), `--language` (auto-detect by default).
+- `py-transcribe/requirements.txt` — Python dependencies for the transcription pipeline.
 - Voice connection state-change and error logging in `recorder.js` for debugging connection issues.
 - `sodium-native` ^5.1.0 dependency — required by `@discordjs/voice` as the voice encryption backend.
 - `py-transcribe/` directory — placeholder for the upcoming Whisper/MLX transcription pipeline.
