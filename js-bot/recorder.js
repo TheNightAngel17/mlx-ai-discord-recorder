@@ -174,6 +174,17 @@ class Recorder {
     this.startTime = new Date();
     this.audioBuffers = new Map();
 
+    // Debug: log every state transition so we can see where it stalls
+    connection.on("stateChange", (oldState, newState) => {
+      this.logger.info(
+        `Voice connection state: ${oldState.status} -> ${newState.status}`
+      );
+    });
+
+    connection.on("error", (err) => {
+      this.logger.error(`Voice connection error: ${err.message}`);
+    });
+
     // Wait until the voice connection is fully ready before subscribing.
     // Audio packets are only delivered once the connection reaches Ready state.
     try {
