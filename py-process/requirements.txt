@@ -1,0 +1,5 @@
+# MLX AI Discord Recorder — Whisper Transcription Pipeline
+#
+# Core
+PyYAML>=6.0
+openai-whisper>=20231117    # OpenAI Whisper for speech-to-text transcription

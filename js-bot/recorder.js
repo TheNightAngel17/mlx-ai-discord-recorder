@@ -12,12 +12,19 @@
 
 const fs = require("fs");
 const path = require("path");
+const { Transform } = require("stream");
 const {
   joinVoiceChannel,
   entersState,
   VoiceConnectionStatus,
   EndBehaviorType,
 } = require("@discordjs/voice");
+const {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  StringSelectMenuBuilder,
+} = require("discord.js");
 const prism = require("prism-media");
 
 // WAV parameters — must match the Opus decoder settings
@@ -26,9 +33,69 @@ const CHANNELS = 2;
 const BIT_DEPTH = 16; // 16-bit PCM
 const BYTES_PER_SAMPLE = BIT_DEPTH / 8;
 
+// Discord sends 20ms Opus frames: 960 samples per channel at 48 kHz
+const FRAME_DURATION_MS = 20;
+const FRAME_BYTES = (SAMPLE_RATE * CHANNELS * BYTES_PER_SAMPLE * FRAME_DURATION_MS) / 1000; // 3840 bytes per 20ms frame
+
 // Timeouts
 const CONNECTION_READY_TIMEOUT_MS = 20_000; // max wait for VoiceConnectionStatus.Ready
 const STREAM_FINISH_TIMEOUT_MS = 3_000; // max wait for fileStream 'finish' on stop
+
+/**
+ * A Transform stream that injects silence buffers for gaps in incoming PCM data.
+ *
+ * Discord stops sending Opus packets when a user is silent (voice activity
+ * detection). Without padding, the WAV file's timeline collapses — e.g. a user
+ * who speaks at 0:00 and again at 2:00 would have both utterances back-to-back.
+ *
+ * This stream tracks wall-clock time between received chunks and writes zero-
+ * filled (silence) PCM data for any gap longer than one frame (20ms). This keeps
+ * all per-user WAV files time-aligned with the recording session start.
+ */
+class SilencePadTransform extends Transform {
+  /**
+   * @param {number} sessionStartTime  Date.now() when the recording session started
+   */
+  constructor(sessionStartTime) {
+    super();
+    this.sessionStartTime = sessionStartTime;
+    this.bytesWritten = 0;
+  }
+
+  _transform(chunk, _encoding, callback) {
+    const now = Date.now();
+    const elapsedMs = now - this.sessionStartTime;
+    const expectedBytes = Math.floor(
+      (elapsedMs / 1000) * SAMPLE_RATE * CHANNELS * BYTES_PER_SAMPLE
+    );
+
+    // If we're behind where we should be, fill the gap with silence
+    const gap = expectedBytes - this.bytesWritten;
+    if (gap > FRAME_BYTES) {
+      // Round to nearest frame boundary to avoid partial-frame artifacts
+      const silenceBytes = Math.floor(gap / FRAME_BYTES) * FRAME_BYTES;
+      // Write silence in chunks to avoid huge single allocations
+      const CHUNK_SIZE = 48000; // ~250ms at a time
+      let remaining = silenceBytes;
+      while (remaining > 0) {
+        const size = Math.min(remaining, CHUNK_SIZE);
+        this.push(Buffer.alloc(size, 0));
+        remaining -= size;
+      }
+      this.bytesWritten += silenceBytes;
+    }
+
+    // Write the actual audio data
+    this.push(chunk);
+    this.bytesWritten += chunk.length;
+
+    callback();
+  }
+
+  _flush(callback) {
+    callback();
+  }
+}
 
 /**
  * Build a WAV file Buffer from raw PCM data.
@@ -174,6 +241,17 @@ class Recorder {
     this.startTime = new Date();
     this.audioBuffers = new Map();
 
+    // Debug: log every state transition so we can see where it stalls
+    connection.on("stateChange", (oldState, newState) => {
+      this.logger.info(
+        `Voice connection state: ${oldState.status} -> ${newState.status}`
+      );
+    });
+
+    connection.on("error", (err) => {
+      this.logger.error(`Voice connection error: ${err.message}`);
+    });
+
     // Wait until the voice connection is fully ready before subscribing.
     // Audio packets are only delivered once the connection reaches Ready state.
     try {
@@ -270,13 +348,17 @@ class Recorder {
     // Save WAV files for all captured users
     const savePromises = [];
     for (const [userId, entry] of this.audioBuffers.entries()) {
-      const { username, opusStream, fileStream, pcmPath } = entry;
+      const { username, opusStream, silencePad, fileStream, pcmPath } = entry;
 
       savePromises.push(
         new Promise((resolve) => {
           // Stop new opus packets from coming in
           if (opusStream && !opusStream.destroyed) {
             opusStream.destroy();
+          }
+          // End the silence padder so it flushes and lets the file stream finish
+          if (silencePad && !silencePad.destroyed) {
+            silencePad.end();
           }
 
           const finish = () => {
@@ -334,15 +416,33 @@ class Recorder {
     if (guild) {
       const announceChannel = await this._getAnnounceChannel(guild);
       if (announceChannel) {
-        if (auto) {
-          await announceChannel.send(
-            `Recording automatically stopped (channel empty). Files saved to \`${relPath}\``
-          );
-        } else {
-          await announceChannel.send(
-            `Recording stopped — files saved to \`${relPath}\``
-          );
-        }
+        const defaultModel = this.config.whisper_model || "base";
+
+        const modelSelectRow = new ActionRowBuilder().addComponents(
+          new StringSelectMenuBuilder()
+            .setCustomId(`post_process_model:${sessionName}`)
+            .setPlaceholder(`Model: ${defaultModel} (click to change)`)
+            .addOptions([
+              { label: "tiny",   description: "Fastest, lowest accuracy",  value: "tiny"   },
+              { label: "base",   description: "Fast, decent accuracy",      value: "base"   },
+              { label: "small",  description: "Balanced",                   value: "small"  },
+              { label: "medium", description: "Slower, higher accuracy",    value: "medium" },
+              { label: "large",  description: "Slowest, best accuracy",     value: "large"  },
+            ])
+        );
+
+        const startButtonRow = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`post_process:${sessionName}:${defaultModel}`)
+            .setLabel(`▶ Start Processing (${defaultModel})`)
+            .setStyle(ButtonStyle.Primary)
+        );
+
+        const content = auto
+          ? `Recording automatically stopped (channel empty). Files saved to \`${relPath}\``
+          : `Recording stopped — files saved to \`${relPath}\``;
+
+        await announceChannel.send({ content, components: [modelSelectRow, startButtonRow] });
       }
     }
 
@@ -473,6 +573,11 @@ class Recorder {
       frameSize: 960,
     });
 
+    // Silence padding transform — injects silence for gaps when the user isn't
+    // speaking, keeping the WAV timeline aligned with wall-clock time from
+    // session start. This ensures all per-user files stay in sync.
+    const silencePad = new SilencePadTransform(this.startTime.getTime());
+
     // Write PCM directly to a temp file to avoid in-memory buffering races
     const pcmPath = path.join(
       this.sessionDir,
@@ -480,13 +585,13 @@ class Recorder {
     );
     const fileStream = fs.createWriteStream(pcmPath);
 
-    opusStream.pipe(decoder).pipe(fileStream);
+    opusStream.pipe(decoder).pipe(silencePad).pipe(fileStream);
 
     decoder.on("error", (err) => {
       this.logger.warn(`Opus decoder error for ${username}: ${err.message}`);
     });
 
-    const entry = { username, opusStream, decoder, fileStream, pcmPath };
+    const entry = { username, opusStream, decoder, silencePad, fileStream, pcmPath };
     this.audioBuffers.set(userId, entry);
 
     this.logger.info(`Subscribed to audio for ${username} (${userId})`);

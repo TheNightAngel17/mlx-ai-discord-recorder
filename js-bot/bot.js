@@ -26,6 +26,7 @@ const {
   SlashCommandSubcommandBuilder,
 } = require("discord.js");
 const { Recorder } = require("./recorder");
+const { PostProcessor } = require("./postProcessor");
 
 // ---------------------------------------------------------------------------
 // Logging helper — matches Python bot format: YYYY-MM-DD HH:MM:SS [LEVEL] module: message
@@ -116,6 +117,50 @@ const commands = [
             .setDescription("Show the status of the current recording session")
         )
     )
+    .addSubcommandGroup(
+      new SlashCommandSubcommandGroupBuilder()
+        .setName("post-process")
+        .setDescription("Post-processing commands")
+        .addSubcommand(
+          new SlashCommandSubcommandBuilder()
+            .setName("start")
+            .setDescription("Run post-processing on a recording session")
+            .addStringOption((opt) =>
+              opt
+                .setName("session_name")
+                .setDescription(
+                  "The session folder name (e.g. 20260330_033020_test)"
+                )
+                .setRequired(true)
+            )
+            .addStringOption((opt) =>
+              opt
+                .setName("model")
+                .setDescription("Whisper model size (default: base)")
+                .setRequired(false)
+                .addChoices(
+                  { name: "tiny", value: "tiny" },
+                  { name: "base", value: "base" },
+                  { name: "small", value: "small" },
+                  { name: "medium", value: "medium" },
+                  { name: "large", value: "large" }
+                )
+            )
+            .addStringOption((opt) =>
+              opt
+                .setName("language")
+                .setDescription(
+                  "Language code (e.g. 'en'). Omit for auto-detect."
+                )
+                .setRequired(false)
+            )
+        )
+        .addSubcommand(
+          new SlashCommandSubcommandBuilder()
+            .setName("status")
+            .setDescription("Check if post-processing is currently running")
+        )
+    )
     .toJSON(),
 ];
 
@@ -133,6 +178,7 @@ const client = new Client({
 });
 
 const recorder = new Recorder(config, makeLogger("recorder"));
+const postProcessor = new PostProcessor(config, makeLogger("postProcessor"));
 
 // ---------------------------------------------------------------------------
 // Register guild commands on startup
@@ -161,22 +207,114 @@ client.on("interactionCreate", async (interaction) => {
   const group = interaction.options.getSubcommandGroup(false);
   const sub = interaction.options.getSubcommand(false);
 
-  if (group !== "record") return;
-
-  if (sub === "start") {
-    const voiceChannel = interaction.options.getChannel("voice_channel");
-    const sessionName = interaction.options.getString("session_name");
-    await recorder.start(interaction, voiceChannel, sessionName);
-  } else if (sub === "stop") {
-    await recorder.stop(interaction);
-  } else if (sub === "status") {
-    await recorder.status(interaction);
+  if (group === "record") {
+    if (sub === "start") {
+      const voiceChannel = interaction.options.getChannel("voice_channel");
+      const sessionName = interaction.options.getString("session_name");
+      await recorder.start(interaction, voiceChannel, sessionName);
+    } else if (sub === "stop") {
+      await recorder.stop(interaction);
+    } else if (sub === "status") {
+      await recorder.status(interaction);
+    }
+  } else if (group === "post-process") {
+    if (sub === "start") {
+      const sessionName = interaction.options.getString("session_name");
+      const defaultModel = config.whisper_model || "base";
+      const defaultLang = config.whisper_language === "auto" ? null : (config.whisper_language || null);
+      const model = interaction.options.getString("model") || defaultModel;
+      const language = interaction.options.getString("language") || defaultLang;
+      await postProcessor.postProcess(interaction, sessionName, model, language);
+    } else if (sub === "status") {
+      await postProcessor.status(interaction);
+    }
   }
 });
 
 // ---------------------------------------------------------------------------
-// Voice state forwarding
+// Button + select menu routing for post-processing
 // ---------------------------------------------------------------------------
+client.on("interactionCreate", async (interaction) => {
+  const { ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder } = require("discord.js");
+
+  // ── Model select menu: post_process_model:<sessionName> ──────────────────
+  if (interaction.isStringSelectMenu() && interaction.customId.startsWith("post_process_model:")) {
+    const sessionName = interaction.customId.slice("post_process_model:".length);
+    const chosenModel = interaction.values[0];
+
+    // Rebuild the select menu (keep it enabled so the user can change their mind)
+    const modelSelectRow = new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId(`post_process_model:${sessionName}`)
+        .setPlaceholder(`Model: ${chosenModel}`)
+        .addOptions([
+          { label: "tiny",   description: "Fastest, lowest accuracy",  value: "tiny",   default: chosenModel === "tiny"   },
+          { label: "base",   description: "Fast, decent accuracy",      value: "base",   default: chosenModel === "base"   },
+          { label: "small",  description: "Balanced",                   value: "small",  default: chosenModel === "small"  },
+          { label: "medium", description: "Slower, higher accuracy",    value: "medium", default: chosenModel === "medium" },
+          { label: "large",  description: "Slowest, best accuracy",     value: "large",  default: chosenModel === "large"  },
+        ])
+    );
+
+    // Update the button to reflect the newly chosen model
+    const startButtonRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`post_process:${sessionName}:${chosenModel}`)
+        .setLabel(`▶ Start Processing (${chosenModel})`)
+        .setStyle(ButtonStyle.Primary)
+    );
+
+    await interaction.update({ components: [modelSelectRow, startButtonRow] });
+    return;
+  }
+
+  // ── Start button: post_process:<sessionName>:<model> ─────────────────────
+  if (interaction.isButton() && interaction.customId.startsWith("post_process:")) {
+    const parts = interaction.customId.split(":");
+    // customId format: post_process:<sessionName>:<model>
+    // sessionName itself may contain colons, so everything between index 1 and
+    // the last segment is the session name.
+    const model = parts[parts.length - 1];
+    const sessionName = parts.slice(1, parts.length - 1).join(":");
+
+    const defaultLang =
+      config.whisper_language === "auto"
+        ? null
+        : config.whisper_language || null;
+
+    // Disable both rows so nothing can be clicked while processing runs
+    const disabledSelectRow = new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId(`post_process_model:${sessionName}`)
+        .setPlaceholder(`Model: ${model}`)
+        .addOptions([
+          { label: "tiny",   value: "tiny"   },
+          { label: "base",   value: "base"   },
+          { label: "small",  value: "small"  },
+          { label: "medium", value: "medium" },
+          { label: "large",  value: "large"  },
+        ])
+        .setDisabled(true)
+    );
+    const disabledButtonRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`post_process:${sessionName}:${model}`)
+        .setLabel(`▶ Start Processing (${model})`)
+        .setStyle(ButtonStyle.Primary)
+        .setDisabled(true)
+    );
+    await interaction.update({ components: [disabledSelectRow, disabledButtonRow] });
+
+    await postProcessor.postProcessFromButton(
+      interaction,
+      sessionName,
+      model,
+      defaultLang
+    );
+  }
+});
+
+
 client.on("voiceStateUpdate", (oldState, newState) => {
   recorder.onVoiceStateUpdate(oldState, newState);
 });
