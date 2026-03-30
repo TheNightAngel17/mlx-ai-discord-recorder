@@ -9,3 +9,11 @@ output_directory: D:/mlx-ai-recordings
 # The channel must already exist in your server.
 # Examples: "bot-commands", "general", "dnd-bot"
 announce_channel: "bot-commands"
+
+# Whisper transcription defaults.
+# These are used when the /mlx-ai transcribe start command is run
+# without specifying --model or --language.
+# Model options: tiny, base, small, medium, large
+whisper_model: "base"
+# Language code (e.g. "en", "es", "fr"). Set to "auto" for auto-detection.
+whisper_language: "en"

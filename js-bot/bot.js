@@ -220,8 +220,10 @@ client.on("interactionCreate", async (interaction) => {
   } else if (group === "transcribe") {
     if (sub === "start") {
       const sessionName = interaction.options.getString("session_name");
-      const model = interaction.options.getString("model") || "base";
-      const language = interaction.options.getString("language") || null;
+      const defaultModel = config.whisper_model || "base";
+      const defaultLang = config.whisper_language === "auto" ? null : (config.whisper_language || null);
+      const model = interaction.options.getString("model") || defaultModel;
+      const language = interaction.options.getString("language") || defaultLang;
       await transcriber.transcribe(interaction, sessionName, model, language);
     } else if (sub === "status") {
       await transcriber.status(interaction);

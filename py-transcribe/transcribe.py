@@ -72,19 +72,29 @@ def main():
     )
     parser.add_argument(
         "--model",
-        default="base",
+        default=None,
         choices=["tiny", "base", "small", "medium", "large"],
-        help="Whisper model size (default: base)",
+        help="Whisper model size (default: from config.yaml, or 'base')",
     )
     parser.add_argument(
         "--language",
         default=None,
-        help="Language code (e.g. 'en'). If omitted, Whisper auto-detects.",
+        help="Language code (e.g. 'en'). If omitted, uses config.yaml default or auto-detects.",
     )
     args = parser.parse_args()
 
     # Load config and resolve session path
     config = load_config()
+
+    # Apply config defaults if CLI flags weren't provided
+    config_model = config.get("whisper_model", "base")
+    config_language = config.get("whisper_language", None)
+    if config_language == "auto":
+        config_language = None
+
+    model_size = args.model or config_model
+    language = args.language or config_language
+
     output_dir = config.get("output_directory", "./recordings")
     session_dir = Path(output_dir) / args.session
 
@@ -100,15 +110,15 @@ def main():
 
     print(f"Session:  {args.session}")
     print(f"Path:     {session_dir}")
-    print(f"Model:    {args.model}")
-    print(f"Language: {args.language or 'auto-detect'}")
+    print(f"Model:    {model_size}")
+    print(f"Language: {language or 'auto-detect'}")
     print(f"Files:    {len(wav_files)} WAV file(s)")
     print()
 
     # Load Whisper model
-    print(f"Loading Whisper model '{args.model}'...")
+    print(f"Loading Whisper model '{model_size}'...")
     t0 = time.time()
-    model = whisper.load_model(args.model)
+    model = whisper.load_model(model_size)
     print(f"Model loaded in {time.time() - t0:.1f}s\n")
 
     # Transcribe each user's WAV
@@ -117,7 +127,7 @@ def main():
         print(f"Transcribing {username}...", end=" ", flush=True)
 
         t0 = time.time()
-        result = transcribe_wav(model, wav_path, args.language)
+        result = transcribe_wav(model, wav_path, language)
         elapsed = time.time() - t0
 
         # Write per-user transcript
@@ -133,7 +143,7 @@ def main():
     all_segments = []
     for wav_path in wav_files:
         username = wav_path.stem
-        result = transcribe_wav(model, wav_path, args.language)
+        result = transcribe_wav(model, wav_path, language)
         for seg in result.get("segments", []):
             all_segments.append(
                 {
