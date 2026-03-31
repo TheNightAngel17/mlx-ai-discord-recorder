@@ -23,6 +23,7 @@ const {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
+  ChannelType,
   StringSelectMenuBuilder,
 } = require("discord.js");
 const prism = require("prism-media");
@@ -188,7 +189,6 @@ class Recorder {
     await interaction.deferReply({ ephemeral: true });
 
     // Verify the selected channel is actually a voice channel
-    const { ChannelType } = require("discord.js");
     if (
       voiceChannel.type !== ChannelType.GuildVoice &&
       voiceChannel.type !== ChannelType.GuildStageVoice

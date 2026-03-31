@@ -17,6 +17,9 @@ require("dotenv").config({ path: path.join(__dirname, "../.env") });
 const fs = require("fs");
 const yaml = require("js-yaml");
 const {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
   Client,
   GatewayIntentBits,
   REST,
@@ -24,6 +27,7 @@ const {
   SlashCommandBuilder,
   SlashCommandSubcommandGroupBuilder,
   SlashCommandSubcommandBuilder,
+  StringSelectMenuBuilder,
 } = require("discord.js");
 const { Recorder } = require("./recorder");
 const { PostProcessor } = require("./postProcessor");
@@ -356,8 +360,6 @@ client.on("interactionCreate", async (interaction) => {
 // Button + select menu routing for post-processing
 // ---------------------------------------------------------------------------
 client.on("interactionCreate", async (interaction) => {
-  const { ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder } = require("discord.js");
-
   // ── Model select menu: post_process_model:<sessionName> ──────────────────
   if (interaction.isStringSelectMenu() && interaction.customId.startsWith("post_process_model:")) {
     const sessionName = interaction.customId.slice("post_process_model:".length);
