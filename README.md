@@ -347,6 +347,11 @@ The **post-process** command runs steps 2–4 automatically in sequence. Each st
 ```
 mlx-ai-discord-recorder/
 ├── .env.example              # Template for secrets
+├── .github/
+│   ├── copilot-instructions.md   # Copilot coding conventions & security checklist
+│   └── prompts/                  # Reusable prompts for documentation updates
+│       ├── updateChangelog.prompt.md
+│       └── updateReadme.prompt.md
 ├── config.yaml               # User-editable non-secret settings
 ├── CHANGELOG.md              # Project changelog
 ├── README.md                 # This file

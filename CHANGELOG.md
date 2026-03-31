@@ -30,6 +30,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - `providers.py` — Provider abstraction for Ollama, OpenAI, and Anthropic (no vendor SDKs)
 - `config.yaml` — Centralized non-secret configuration for all services
 - `.env.example` — Template for secrets (Discord token, guild ID, API keys)
+- `.github/copilot-instructions.md` — Project-wide Copilot instructions covering coding conventions, security scrutiny checklist, documentation requirements, and architecture decisions
 
 ### Changed
 
