@@ -111,6 +111,15 @@ examples:
         top_k=args.top_k,
     )
 
+    # --- Timing summary ---
+    t = result["timings"]
+    print(
+        f"Timings   : embed={t['embed_s']:.2f}s  "
+        f"retrieval={t['retrieval_s']:.2f}s  "
+        f"chat={t['chat_s']:.2f}s  "
+        f"total={t['total_s']:.2f}s"
+    )
+    print()
     print("=" * 60)
     print("ANSWER")
     print("=" * 60)

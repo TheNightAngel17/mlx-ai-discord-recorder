@@ -37,8 +37,18 @@ chunk_minutes: 3                           # Time-window size for chunking trans
 #   python py-process/vectorize.py --all --force
 embedding_provider: ollama          # ollama | openai
 embedding_model: nomic-embed-text   # Model name for the chosen embedding provider
-chat_provider: ollama               # ollama | openai | anthropic
-chat_model: llama3                  # Model name for chat/completion
+
+# OLLAMA SETTINGS
+chat_provider: ollama
+chat_model: llama3.2
+
+# ANTHROPIC SETTINGS
+# chat_provider: anthropic
+# chat_model: claude-sonnet-4-5
+
+# OPENAI SETTINGS
+# chat_provider: openai
+# chat_model: gpt-4.1
 
 # Ollama settings (used when provider is "ollama")
 ollama_base_url: http://localhost:11434    # Ollama API base URL

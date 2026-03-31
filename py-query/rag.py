@@ -18,6 +18,7 @@ vectorize.py --force on all sessions.
 """
 
 import sys
+import time
 from pathlib import Path
 
 import chromadb
@@ -130,18 +131,22 @@ def query_rag(
 
     # --- Embed the question ---
     embedding_provider = get_embedding_provider(config)
+    t0 = time.perf_counter()
     query_embedding = embedding_provider.embed(question)
+    embed_time = time.perf_counter() - t0
 
     # --- Query ChromaDB ---
     where = {"session_name": session_filter} if session_filter else None
     n_results = min(top_k, total)
 
+    t0 = time.perf_counter()
     results = collection.query(
         query_embeddings=[query_embedding],
         n_results=n_results,
         where=where,
         include=["documents", "metadatas", "distances"],
     )
+    retrieval_time = time.perf_counter() - t0
 
     ids = results["ids"][0]
     docs = results["documents"][0]
@@ -177,6 +182,17 @@ def query_rag(
     # --- Generate answer ---
     system_prompt = _build_system_prompt(chunks_for_prompt)
     chat_provider = get_chat_provider(config)
+    t0 = time.perf_counter()
     answer = chat_provider.chat(system_prompt=system_prompt, user_message=question)
+    chat_time = time.perf_counter() - t0
 
-    return {"answer": answer, "sources": sources}
+    return {
+        "answer": answer,
+        "sources": sources,
+        "timings": {
+            "embed_s": embed_time,
+            "retrieval_s": retrieval_time,
+            "chat_s": chat_time,
+            "total_s": embed_time + retrieval_time + chat_time,
+        },
+    }
