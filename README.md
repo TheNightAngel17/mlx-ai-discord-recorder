@@ -1,36 +1,286 @@
 # MLX AI Discord Recorder
 
-A Discord bot that joins a voice channel and records each participant's audio into a separate `.wav` file per session. The recordings can then be fed into a speech-to-text pipeline (such as [Whisper](https://github.com/openai/whisper)) to generate session transcripts, which can be vectorised and queried via a self-hosted RAG system — perfect for archiving D&D sessions.
+A Discord bot that records voice channel audio, transcribes it with [OpenAI Whisper](https://github.com/openai/whisper), and makes sessions searchable via a local RAG (Retrieval-Augmented Generation) pipeline — perfect for archiving D&D sessions.
+
+---
+
+## Table of Contents
+
+- [Features](#features)
+- [Architecture Overview](#architecture-overview)
+- [Prerequisites](#prerequisites)
+- [Installation](#installation)
+- [Configuration](#configuration)
+- [Quick Start](#quick-start)
+- [Discord Developer Portal Setup](#discord-developer-portal-setup)
+- [AI Pipeline](#ai-pipeline)
+- [Project Structure](#project-structure)
+- [Sub-Project Documentation](#sub-project-documentation)
+- [License](#license)
 
 ---
 
 ## Features
 
 - 🎙️ **Per-user WAV recording** — each participant gets their own clean audio file
-- 📁 **Timestamped session folders** — `yyyyMMdd_HHmmss_<session_name>`
+- 📁 **Timestamped session folders** — `YYYYMMDD_HHMMSS_<session_name>`
 - 🔴 **Mid-session join detection** — players who join late are recorded automatically
-- ⏹️ **Auto-stop when channel empties** — no manual intervention needed at session end
+- ⏹️ **Auto-stop when channel empties** — no manual intervention needed
 - 💬 **Text-channel announcements** — configurable channel for start/stop notifications
-- 🎵 **Audio merge** — mix all per-user WAVs into a single combined MP3 via `/mlx-ai merge-audio start`
-- 📝 **Whisper transcription** — per-user and combined transcripts via `/mlx-ai post-process start`
-- 🧠 **Vector embeddings** — chunk and embed transcripts into ChromaDB via `/mlx-ai vectorize start`
-- 🔍 **RAG query** — ask natural-language questions about your sessions via `py-query/query.py`, with support for Ollama, OpenAI, and Anthropic
-- 🐳 **Docker-ready** — pre-wired for future Kubernetes deployment
+- 🎵 **Audio merge** — mix all per-user WAVs into a single combined MP3
+- 📝 **Whisper transcription** — per-user and combined transcripts with timestamps
+- 🧠 **Vector embeddings** — chunk and embed transcripts into ChromaDB
+- 🔍 **RAG query** — ask natural-language questions about your sessions via Discord or CLI
+- 🔌 **Multi-provider LLM support** — Ollama (local), OpenAI, and Anthropic
+
+---
+
+## Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     Discord Server                              │
+│   Voice Channel ──► js-bot/ (Node.js)                           │
+│                       │  Records per-user WAV files              │
+│                       │  Registers /mlx-ai slash commands        │
+│                       ▼                                          │
+│                   py-process/ (Python)                           │
+│                       │  Transcribes (Whisper)                   │
+│                       │  Merges audio (pydub/ffmpeg)             │
+│                       │  Vectorizes (ChromaDB + Ollama)          │
+│                       ▼                                          │
+│                   py-query/ (Python)                             │
+│                       │  RAG queries (embed → retrieve → chat)   │
+│                       │  Supports Ollama, OpenAI, Anthropic      │
+│                       ▼                                          │
+│                   Discord / CLI answer                           │
+└─────────────────────────────────────────────────────────────────┘
+```
 
 ---
 
 ## Prerequisites
 
-- **Python 3.11+**
-- **ffmpeg** (required by py-cord for voice audio)
+### Required Software
+
+| Software | Version | Purpose | Install Guide |
+|----------|---------|---------|---------------|
+| **Node.js** | 18+ | Discord bot runtime | [nodejs.org](https://nodejs.org/) |
+| **Python** | 3.11+ | Transcription, vectorization, RAG | [python.org](https://www.python.org/downloads/) |
+| **ffmpeg** | Latest | Audio processing (Whisper + pydub) | See below |
+| **Ollama** | Latest | Local LLM inference (optional — can use OpenAI/Anthropic instead) | [ollama.com](https://ollama.com/) |
 
 ### Installing ffmpeg
 
-| Platform | Command |
-|----------|---------|
-| macOS    | `brew install ffmpeg` |
-| Debian/Ubuntu | `sudo apt install ffmpeg` |
-| Windows  | Download from <https://ffmpeg.org/download.html> and add to PATH |
+#### Bash (macOS / Linux)
+
+```bash
+# macOS
+brew install ffmpeg
+
+# Debian / Ubuntu
+sudo apt update && sudo apt install ffmpeg
+
+# Verify
+ffmpeg -version
+```
+
+#### PowerShell (Windows)
+
+```powershell
+# Using winget (Windows 11 / Windows 10 with winget installed)
+winget install --id Gyan.FFmpeg -e
+
+# Or using Chocolatey
+choco install ffmpeg
+
+# Or download manually from https://ffmpeg.org/download.html and add to PATH
+
+# Verify
+ffmpeg -version
+```
+
+### Installing Ollama (for local LLM)
+
+If using Ollama as your embedding/chat provider:
+
+#### Bash
+
+```bash
+# macOS / Linux
+curl -fsSL https://ollama.com/install.sh | sh
+
+# Pull required models
+ollama pull nomic-embed-text    # embedding model
+ollama pull llama3.2            # chat model (or your preferred model)
+```
+
+#### PowerShell
+
+```powershell
+# Download and install from https://ollama.com/download
+
+# Pull required models
+ollama pull nomic-embed-text
+ollama pull llama3.2
+```
+
+---
+
+## Installation
+
+### 1. Clone the Repository
+
+#### Bash
+
+```bash
+git clone https://github.com/TheNightAngel17/mlx-ai-discord-recorder.git
+cd mlx-ai-discord-recorder
+```
+
+#### PowerShell
+
+```powershell
+git clone https://github.com/TheNightAngel17/mlx-ai-discord-recorder.git
+cd mlx-ai-discord-recorder
+```
+
+### 2. Set Up Environment Variables
+
+#### Bash
+
+```bash
+cp .env.example .env
+# Edit .env with your favorite editor:
+nano .env
+```
+
+#### PowerShell
+
+```powershell
+Copy-Item .env.example .env
+# Edit .env with your favorite editor:
+notepad .env
+```
+
+Fill in the required values:
+
+```dotenv
+DISCORD_TOKEN=your_bot_token_here
+GUILD_ID=your_guild_id_here
+
+# Optional (only if using cloud LLM providers)
+# OPENAI_API_KEY=sk-...
+# ANTHROPIC_API_KEY=sk-ant-...
+```
+
+### 3. Review Configuration
+
+Edit `config.yaml` to set your output directory, announcement channel, and LLM provider preferences. See [Configuration](#configuration) for details.
+
+### 4. Install JS Bot Dependencies
+
+#### Bash
+
+```bash
+cd js-bot
+npm install
+cd ..
+```
+
+#### PowerShell
+
+```powershell
+cd js-bot
+npm install
+cd ..
+```
+
+### 5. Install Python Dependencies
+
+It's recommended to use a virtual environment:
+
+#### Bash
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+
+pip install -r py-process/requirements.txt
+pip install -r py-query/requirements.txt
+```
+
+#### PowerShell
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+
+pip install -r py-process/requirements.txt
+pip install -r py-query/requirements.txt
+```
+
+> **GPU Acceleration (recommended):** If you have an NVIDIA GPU, install CUDA-enabled PyTorch for significantly faster Whisper transcription. See the [py-process README](./py-process/README.md#gpu-acceleration-recommended) for instructions.
+
+---
+
+## Configuration
+
+### `.env` — Secrets (never commit this file)
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `DISCORD_TOKEN` | ✅ | Bot token from the Discord Developer Portal |
+| `GUILD_ID` | ✅ | Numeric server ID where the bot operates |
+| `OPENAI_API_KEY` | Only if using OpenAI provider | OpenAI API key |
+| `ANTHROPIC_API_KEY` | Only if using Anthropic provider | Anthropic API key |
+
+### `config.yaml` — Non-Secret Settings
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `output_directory` | `./recordings` | Where session folders and audio files are written |
+| `announce_channel` | `"bot-commands"` | Text channel for bot announcements |
+| `mp3_bitrate` | `"128k"` | MP3 compression bitrate |
+| `keep_wav` | `true` | Keep original per-user WAV files after MP3 export |
+| `whisper_model` | `"base"` | Default Whisper model size (`tiny`, `base`, `small`, `medium`, `large`) |
+| `whisper_language` | `"en"` | Default language code, or `"auto"` for auto-detection |
+| `vector_db_directory` | `./vectordb` | Where ChromaDB persists its data |
+| `chunk_minutes` | `3` | Time-window size (minutes) for chunking transcripts |
+| `embedding_provider` | `ollama` | Embedding backend: `ollama` or `openai` |
+| `embedding_model` | `nomic-embed-text` | Model name for the chosen embedding provider |
+| `chat_provider` | `ollama` | Chat backend: `ollama`, `openai`, or `anthropic` |
+| `chat_model` | `llama3.2` | Model name for the chosen chat provider |
+| `ollama_base_url` | `http://localhost:11434` | Ollama API base URL |
+
+> ⚠️ **Warning:** Changing `embedding_provider` or `embedding_model` after vectorizing sessions requires re-running `python py-process/vectorize.py --all --force`.
+
+---
+
+## Quick Start
+
+After installation, start the bot:
+
+#### Bash
+
+```bash
+cd js-bot
+node bot.js
+```
+
+#### PowerShell
+
+```powershell
+cd js-bot
+node bot.js
+```
+
+Then use Discord slash commands:
+
+1. `/mlx-ai record start voice_channel:#DnD-Voice session_name:Campaign1_Session4` — Start recording
+2. `/mlx-ai record stop` — Stop recording (or just leave the channel — it auto-stops)
+3. `/mlx-ai post-process start session_name:20260330_143000_Campaign1_Session4` — Transcribe + merge + vectorize
+4. `/mlx-ai query ask question:What happened when the party entered the cave?` — Ask questions about recorded sessions
 
 ---
 
@@ -45,7 +295,7 @@ A Discord bot that joins a voice channel and records each participant's audio in
 
 1. In the left sidebar, click **Bot**.
 2. Click **Add Bot** → **Yes, do it!**
-3. Under **Token**, click **Reset Token**, confirm, then copy the token — you will need it for your `.env` file.
+3. Under **Token**, click **Reset Token**, confirm, then copy the token into your `.env` file.
 
 ### 3 — Enable Privileged Gateway Intents
 
@@ -59,166 +309,14 @@ Click **Save Changes**.
 ### 4 — Invite the Bot to Your Server
 
 1. In the left sidebar, click **OAuth2** → **URL Generator**.
-2. Under **Scopes**, select:
-   - `bot`
-   - `applications.commands`
-3. Under **Bot Permissions**, select:
-   - `Connect`
-   - `Speak`
-   - `Use Voice Activity`
-   - `Read Messages / View Channels`
-   - `Send Messages`
+2. Under **Scopes**, select: `bot`, `applications.commands`
+3. Under **Bot Permissions**, select: `Connect`, `Speak`, `Use Voice Activity`, `Read Messages / View Channels`, `Send Messages`
 4. Copy the generated URL, paste it into your browser, and invite the bot to your server.
 
 ### 5 — Get Your Guild (Server) ID
 
 1. In Discord, open **User Settings → Advanced** and enable **Developer Mode**.
-2. Right-click your server icon in the left sidebar and select **Copy Server ID**.
-
----
-
-## Installation
-
-```bash
-# 1. Clone the repository
-git clone https://github.com/TheNightAngel17/mlx-ai-discord-recorder.git
-cd mlx-ai-discord-recorder
-
-# 2. Copy the environment template and fill in your values
-cp .env.example .env
-# Edit .env — add your DISCORD_TOKEN and GUILD_ID
-
-# 3. Review and adjust config.yaml (output directory, announcement channel)
-# nano config.yaml
-
-# 4. Install Python dependencies
-pip install -r requirements.txt
-```
-
----
-
-## Configuration
-
-### `.env` (secrets — never commit this file)
-
-```dotenv
-DISCORD_TOKEN=your_bot_token_here
-GUILD_ID=your_numeric_guild_id_here
-```
-
-### `config.yaml` (non-secret settings)
-
-```yaml
-output_directory: ./recordings       # Where session folders are written
-announce_channel: "bot-commands"     # Text channel for bot announcements
-```
-
----
-
-## Running Locally
-
-```bash
-python bot.py
-```
-
-The bot logs to stdout. On first startup it syncs slash commands to your configured guild (takes effect immediately).
-
----
-
-## Running with Docker
-
-```bash
-# Build the image
-docker build -t mlx-ai-discord-recorder .
-
-# Run the container, injecting secrets via --env-file
-docker run --rm \
-  --env-file .env \
-  -v "$(pwd)/recordings:/app/recordings" \
-  mlx-ai-discord-recorder
-```
-
-> **Note:** The `-v` flag mounts a local `recordings/` directory into the container so audio files are written to your host machine and persist across container restarts.
-
----
-
-## Command Reference
-
-All commands live under the `/mlx-ai` slash command group.
-
-### Recording
-
-| Command | Parameters | Description |
-|---------|-----------|-------------|
-| `/mlx-ai record start` | `voice_channel` (required), `session_name` (required) | Join the voice channel and begin per-user recording |
-| `/mlx-ai record stop` | — | Stop the active recording and save all WAV files |
-| `/mlx-ai record status` | — | Show the current session name, channel, duration, and user count |
-
-### Post-Processing (full pipeline)
-
-| Command | Parameters | Description |
-|---------|-----------|-------------|
-| `/mlx-ai post-process start` | `session_name` (required), `model` (optional), `language` (optional) | Run the full pipeline: transcribe → merge audio → vectorize |
-| `/mlx-ai post-process status` | — | Check if post-processing is currently running |
-
-### Audio Merge
-
-| Command | Parameters | Description |
-|---------|-----------|-------------|
-| `/mlx-ai merge-audio start` | `session_name` (required) | Mix per-user WAVs into `_session_mix.wav` + `_session_mix.mp3` |
-| `/mlx-ai merge-audio status` | — | Check if an audio merge is currently running |
-
-### Vectorize
-
-| Command | Parameters | Description |
-|---------|-----------|-------------|
-| `/mlx-ai vectorize start` | `session_name` (required, or `"all"`), `force` (optional boolean) | Chunk and embed a session's transcript into ChromaDB |
-| `/mlx-ai vectorize status` | — | Check if vectorization is currently running |
-
-### Parameter details
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `voice_channel` | Channel (dropdown) | The voice channel to record; filtered to voice channels only |
-| `session_name` | String | Session folder name, e.g. `20260330_033020_test`, or `"all"` for vectorize |
-| `model` | Choice | Whisper model size: `tiny` / `base` / `small` / `medium` / `large` (default from `config.yaml`) |
-| `language` | String | Language code, e.g. `"en"`. Omit for auto-detect |
-| `force` | Boolean | Re-index even if the session has already been vectorized |
-
-All command responses are **ephemeral** (visible only to the user who ran the command) except for progress messages posted to the `announce_channel`.
-
----
-
-## Text-Channel Announcements
-
-The bot posts announcements to the channel configured in `config.yaml` (`announce_channel`):
-
-| Event | Message |
-|-------|---------|
-| Recording starts | `🔴 Recording started in \`DnD-Voice\` — Session: \`20260327_143000_Campaign1_Session4\`` |
-| User joins mid-session | `🎙️ Now recording \`PlayerTwo\` who joined mid-session` |
-| Recording stops (command) | `⏹️ Recording stopped — files saved to \`recordings/20260327_143000_Campaign1_Session4\`` |
-| Recording stops (channel empty) | `⏹️ Channel empty — recording automatically stopped. Files saved to \`recordings/20260327_143000_Campaign1_Session4\`` |
-
----
-
-## Output Structure
-
-After a full pipeline run, the session folder looks like this:
-
-```
-recordings/
-└── 20260327_143000_Campaign1_Session4/
-    ├── TheNightAngel17.wav              # per-user recording (kept if keep_wav: true)
-    ├── PlayerTwo.wav
-    ├── TheNightAngel17.txt              # per-user Whisper transcript
-    ├── PlayerTwo.txt
-    ├── _combined_transcript.txt         # all users merged chronologically
-    ├── _session_mix.wav                 # all users mixed into one WAV
-    └── _session_mix.mp3                 # compressed combined audio
-```
-
-Vector embeddings are stored separately in `vector_db_directory` (default `D:/mlx-ai-vectordb`).
+2. Right-click your server icon and select **Copy Server ID**.
 
 ---
 
@@ -226,32 +324,21 @@ Vector embeddings are stored separately in `vector_db_directory` (default `D:/ml
 
 The full workflow from recording to searchable archive:
 
-1. **Record** — `/mlx-ai record start` → per-user `.wav` files
-2. **Post-process** — `/mlx-ai post-process start` runs all three steps automatically:
-   - **Transcribe** (`transcribe.py`) → per-user `.txt` + `_combined_transcript.txt`
-   - **Merge audio** (`merge_audio.py`) → `_session_mix.wav` + `_session_mix.mp3`
-   - **Vectorize** (`vectorize.py`) → chunks embedded and stored in ChromaDB
-3. **Query** — use `py-query/query.py` to ask questions about your sessions:
-   ```bash
-   cd py-query
-   python query.py "What happened when the party entered the cave?"
-   python query.py "Who attacked the dragon?" --session 20260330_test --show-sources
-   ```
-   Supports Ollama (local), OpenAI, and Anthropic as LLM backends — configured in `config.yaml`.
+```
+Record ──► Transcribe ──► Merge Audio ──► Vectorize ──► Query
+  │            │               │               │           │
+ WAVs        .txt files     MP3 mix      ChromaDB     LLM answer
+```
 
-Steps can also be run individually via their own slash commands (`/mlx-ai merge-audio start`, `/mlx-ai vectorize start`) or directly from the CLI in `py-process/`.
+| Step | Trigger | Tool |
+|------|---------|------|
+| **Record** | `/mlx-ai record start` | `js-bot/recorder.js` |
+| **Transcribe** | `/mlx-ai post-process start` or `python py-process/transcribe.py` | OpenAI Whisper |
+| **Merge Audio** | `/mlx-ai merge-audio start` or `python py-process/merge_audio.py` | pydub + ffmpeg |
+| **Vectorize** | `/mlx-ai vectorize start` or `python py-process/vectorize.py` | ChromaDB + Ollama/OpenAI |
+| **Query** | `/mlx-ai query ask` or `python py-query/query.py` | RAG (embed → retrieve → chat) |
 
----
-
-## Future: Kubernetes
-
-A `Dockerfile` is included and ready to use. Kubernetes manifests (Deployment, PersistentVolumeClaim, Secret, ConfigMap) are planned as a follow-up to enable fully containerised, self-hosted deployment of the complete D&D transcription pipeline.
-
-Key notes for K8s deployment:
-
-- Run **exactly 1 replica** — Discord's gateway connection is stateful
-- Mount a `PersistentVolumeClaim` to `/app/recordings` to retain audio files across pod restarts
-- Store `DISCORD_TOKEN` in a Kubernetes `Secret`, not a `ConfigMap`
+The **post-process** command runs steps 2–4 automatically in sequence. Each step can also be run individually.
 
 ---
 
@@ -259,27 +346,47 @@ Key notes for K8s deployment:
 
 ```
 mlx-ai-discord-recorder/
-├── config.yaml             # User-editable configuration (non-secret)
-├── .env.example            # Template for secrets (DISCORD_TOKEN, GUILD_ID, API keys)
-├── js-bot/
-│   ├── bot.js              # Entry point — slash commands, interaction routing
-│   ├── recorder.js         # Voice recording logic
-│   ├── postProcessor.js    # Spawns Python scripts; handles merge-audio & vectorize
-│   └── package.json
-├── py-process/
-│   ├── process.py           # Orchestrator — runs transcribe → merge → vectorize
-│   ├── transcribe.py        # Whisper transcription (per-user WAVs → .txt files)
-│   ├── merge_audio.py       # Mix per-user WAVs → _session_mix.wav + .mp3
-│   ├── vectorize.py         # Chunk + embed transcript → ChromaDB
-│   ├── vectordb_helper.py   # CLI tool to inspect, search, and manage the vector DB
-│   └── requirements.txt
-└── py-query/
-    ├── providers.py         # LLM provider abstraction (Ollama, OpenAI, Anthropic)
-    ├── rag.py               # Core RAG logic (embed → retrieve → generate)
-    ├── query.py             # CLI entry point for RAG queries
-    ├── requirements.txt
-    └── README.md
+├── .env.example              # Template for secrets
+├── config.yaml               # User-editable non-secret settings
+├── CHANGELOG.md              # Project changelog
+├── README.md                 # This file
+│
+├── js-bot/                   # Discord bot (Node.js)
+│   ├── bot.js                # Entry point — slash commands, interaction routing
+│   ├── recorder.js           # Voice recording logic (DAVE/E2EE support)
+│   ├── postProcessor.js      # Spawns Python scripts for processing pipeline
+│   ├── queryHandler.js       # Spawns py-query for RAG queries
+│   ├── package.json          # Node.js dependencies
+│   └── README.md             # JS bot documentation
+│
+├── py-process/               # Audio processing pipeline (Python)
+│   ├── process.py            # Orchestrator — runs transcribe → merge → vectorize
+│   ├── transcribe.py         # Whisper transcription (WAVs → .txt files)
+│   ├── merge_audio.py        # Mix per-user WAVs → combined WAV + MP3
+│   ├── vectorize.py          # Chunk + embed transcripts → ChromaDB
+│   ├── vectordb_helper.py    # CLI tool to inspect/search/manage the vector DB
+│   ├── requirements.txt      # Python dependencies
+│   └── README.md             # Processing pipeline documentation
+│
+└── py-query/                 # RAG query service (Python)
+    ├── query.py              # CLI entry point for RAG queries
+    ├── rag.py                # Core RAG logic (embed → retrieve → generate)
+    ├── providers.py          # LLM provider abstraction (Ollama, OpenAI, Anthropic)
+    ├── requirements.txt      # Python dependencies
+    └── README.md             # Query service documentation
 ```
+
+---
+
+## Sub-Project Documentation
+
+Each sub-project has its own detailed README with command references, dependency details, and examples:
+
+| Sub-Project | Description | Documentation |
+|-------------|-------------|---------------|
+| **js-bot/** | Discord bot — recording, slash commands, interaction routing | [js-bot/README.md](./js-bot/README.md) |
+| **py-process/** | Audio processing — transcription, merging, vectorization | [py-process/README.md](./py-process/README.md) |
+| **py-query/** | RAG query — ask questions about recorded sessions | [py-query/README.md](./py-query/README.md) |
 
 ---
 
