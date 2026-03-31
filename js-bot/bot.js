@@ -27,6 +27,7 @@ const {
 } = require("discord.js");
 const { Recorder } = require("./recorder");
 const { PostProcessor } = require("./postProcessor");
+const { QueryHandler } = require("./queryHandler");
 
 // ---------------------------------------------------------------------------
 // Logging helper — matches Python bot format: YYYY-MM-DD HH:MM:SS [LEVEL] module: message
@@ -219,6 +220,44 @@ const commands = [
             .setDescription("Check if vectorization is currently running")
         )
     )
+    .addSubcommandGroup(
+      new SlashCommandSubcommandGroupBuilder()
+        .setName("query")
+        .setDescription("RAG query commands")
+        .addSubcommand(
+          new SlashCommandSubcommandBuilder()
+            .setName("ask")
+            .setDescription("Ask a question about recorded D&D sessions using RAG")
+            .addStringOption((opt) =>
+              opt
+                .setName("question")
+                .setDescription("The question to ask about recorded sessions")
+                .setRequired(true)
+            )
+            .addStringOption((opt) =>
+              opt
+                .setName("session")
+                .setDescription(
+                  "Restrict results to a specific session folder name (optional)"
+                )
+                .setRequired(false)
+            )
+            .addIntegerOption((opt) =>
+              opt
+                .setName("top_k")
+                .setDescription("Number of transcript chunks to retrieve (default: 5)")
+                .setRequired(false)
+                .setMinValue(1)
+                .setMaxValue(20)
+            )
+            .addBooleanOption((opt) =>
+              opt
+                .setName("show_sources")
+                .setDescription("Include the retrieved source chunks in the reply (default: false)")
+                .setRequired(false)
+            )
+        )
+    )
     .toJSON(),
 ];
 
@@ -237,6 +276,7 @@ const client = new Client({
 
 const recorder = new Recorder(config, makeLogger("recorder"));
 const postProcessor = new PostProcessor(config, makeLogger("postProcessor"));
+const queryHandler = new QueryHandler(config, makeLogger("queryHandler"));
 
 // ---------------------------------------------------------------------------
 // Register guild commands on startup
@@ -300,6 +340,14 @@ client.on("interactionCreate", async (interaction) => {
       await postProcessor.vectorize(interaction, sessionName, force);
     } else if (sub === "status") {
       await postProcessor.vectorizeStatus(interaction);
+    }
+  } else if (group === "query") {
+    if (sub === "ask") {
+      const question = interaction.options.getString("question");
+      const sessionFilter = interaction.options.getString("session") ?? null;
+      const topK = interaction.options.getInteger("top_k") ?? 5;
+      const showSources = interaction.options.getBoolean("show_sources") ?? false;
+      await queryHandler.query(interaction, question, sessionFilter, topK, showSources);
     }
   }
 });

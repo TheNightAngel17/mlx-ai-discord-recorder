@@ -8,6 +8,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `py-query/` — new service directory providing a CLI RAG query tool for asking natural-language questions about recorded D&D sessions.
+  - `py-query/providers.py` — provider abstraction layer with abstract base classes (`EmbeddingProvider`, `ChatProvider`) and concrete implementations for three backends:
+    - `OllamaEmbedding` / `OllamaChat` — calls the local Ollama API (`/api/embeddings`, `/api/chat`)
+    - `OpenAIEmbedding` / `OpenAIChat` — calls the OpenAI REST API (`/v1/embeddings`, `/v1/chat/completions`), requires `OPENAI_API_KEY` in `.env`
+    - `AnthropicChat` — calls the Anthropic Messages API (`/v1/messages`), requires `ANTHROPIC_API_KEY` in `.env`; raises a clear error if used as an embedding provider since Anthropic has no embedding API
+    - Factory functions `get_embedding_provider(config)` and `get_chat_provider(config)` for provider selection via config
+    - Uses `requests` only — no OpenAI or Anthropic SDKs
+  - `py-query/rag.py` — core RAG logic (`query_rag()`): embeds the question, queries ChromaDB for top-k chunks, builds a grounded system prompt, calls the chat provider, and returns `{answer, sources}` with full metadata
+  - `py-query/query.py` — CLI entry point: loads `config.yaml` and `.env`, accepts a positional question argument, `--session`, `--top-k`, and `--show-sources` flags
+  - `py-query/requirements.txt` — lightweight dependencies: `chromadb`, `requests`, `PyYAML`, `python-dotenv`
+  - `py-query/README.md` — full documentation: prerequisites, installation, provider configuration guide, usage examples, example output, and provider compatibility table
+- `config.yaml` — added multi-provider LLM settings: `embedding_provider`, `chat_provider`, `chat_model`. The existing `embedding_model` and `ollama_base_url` fields remain and are used by whichever provider is selected. Comments document the provider options and the warning that changing the embedding provider requires re-vectorizing all sessions.
+- `.env.example` — added commented-out entries for `OPENAI_API_KEY` and `ANTHROPIC_API_KEY`.
+
 - `py-process/merge_audio.py` — new CLI script that mixes all per-user WAV recordings for a session into a single `_session_mix.wav` (all users overlaid at time zero), then compresses the combined mix to `_session_mix.mp3`.
   - Usage: `python merge_audio.py <session_name>`
   - Config: `mp3_bitrate` (default `"128k"`) and `keep_wav` (default `true`) in `config.yaml`.

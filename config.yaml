@@ -25,6 +25,33 @@ whisper_language: "en"
 # Vector DB and RAG settings
 # Update these paths to match your OS (Windows: D:/path, Linux/macOS: /path or ./relative)
 vector_db_directory: D:/mlx-ai-vectordb   # Where ChromaDB persists data
-embedding_model: nomic-embed-text          # Ollama embedding model name
 chunk_minutes: 3                           # Time-window size for chunking transcripts (minutes)
+
+# LLM Provider settings
+# Supported embedding providers: ollama | openai
+# Supported chat providers:      ollama | openai | anthropic
+# NOTE: Anthropic does NOT offer an embedding API — use ollama or openai for embeddings.
+#
+# WARNING: embedding_provider and embedding_model must match what was used when
+# vectorize.py indexed the sessions. Changing them requires re-running:
+#   python py-process/vectorize.py --all --force
+embedding_provider: ollama          # ollama | openai
+embedding_model: nomic-embed-text   # Model name for the chosen embedding provider
+
+# OLLAMA SETTINGS
+chat_provider: ollama
+chat_model: llama3.2
+
+# ANTHROPIC SETTINGS
+# chat_provider: anthropic
+# chat_model: claude-sonnet-4-5
+
+# OPENAI SETTINGS
+# chat_provider: openai
+# chat_model: gpt-4.1
+
+# Ollama settings (used when provider is "ollama")
 ollama_base_url: http://localhost:11434    # Ollama API base URL
+# API keys for cloud providers go in .env — never in this file:
+#   OPENAI_API_KEY=sk-...
+#   ANTHROPIC_API_KEY=sk-ant-...
