@@ -260,7 +260,9 @@ class SessionPanel {
 
     return {
       guild: realInteraction.guild,
-      deferReply: async () => { /* already acknowledged via interaction.update() */ },
+      deferReply: async () => {
+        self.logger.debug(`Panel ${panelId}: fake interaction deferReply called (no-op — already acknowledged)`);
+      },
       editReply: async ({ content }) => capture(content, content.startsWith("❌")),
       reply: async ({ content }) => capture(content, content.startsWith("❌")),
     };
@@ -379,12 +381,10 @@ class SessionPanel {
     }
 
     const raw = interaction.fields.getTextInputValue("session_name_input");
-    // Sanitize: keep only word chars and hyphens, matching sanitiseName() in recorder.js
+    // Sanitize: keep only word chars and hyphens, matching sanitiseName() in recorder.js.
+    // Apply the fallback before slice() so an all-underscore input still produces "session".
     const sessionName =
-      raw
-        .replace(/[^\w\-]/g, "_")
-        .replace(/^_+|_+$/g, "")
-        .slice(0, 80) || "session";
+      (raw.replace(/[^\w-]/g, "_").replace(/^_+|_+$/g, "") || "session").slice(0, 80);
 
     state.sessionName = sessionName;
 
@@ -454,8 +454,9 @@ class SessionPanel {
       await this.recorder.start(fakeInteraction, channel, state.sessionName);
 
       if (this.recorder.isRecording) {
-        // Capture the full timestamped folder name that recorder created
-        state.sessionFolderName = this.recorder.sessionName;
+        // Capture the full timestamped folder name that recorder created.
+        // Fall back to the user-supplied name if the recorder state is unexpectedly absent.
+        state.sessionFolderName = this.recorder.sessionName || state.sessionName;
         this._log(
           state,
           `Session folder: \`${state.sessionFolderName}\``

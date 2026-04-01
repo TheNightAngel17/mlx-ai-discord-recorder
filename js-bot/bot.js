@@ -424,6 +424,15 @@ client.on("interactionCreate", async (interaction) => {
     return;
   }
 
+  // ── Session panel — session name modal submit ─────────────────────────────
+  if (
+    interaction.isModalSubmit() &&
+    interaction.customId.startsWith("panel_name:")
+  ) {
+    await sessionPanel.handleNameModal(interaction);
+    return;
+  }
+
   // ── Model select menu: post_process_model:<sessionName> ──────────────────
   if (interaction.isStringSelectMenu() && interaction.customId.startsWith("post_process_model:")) {
     const sessionName = interaction.customId.slice("post_process_model:".length);
@@ -498,18 +507,6 @@ client.on("interactionCreate", async (interaction) => {
       model,
       defaultLang
     );
-  }
-});
-
-// ---------------------------------------------------------------------------
-// Modal submit routing
-// ---------------------------------------------------------------------------
-client.on("interactionCreate", async (interaction) => {
-  if (!interaction.isModalSubmit()) return;
-
-  // ── Session panel — session name modal ────────────────────────────────────
-  if (interaction.customId.startsWith("panel_name:")) {
-    await sessionPanel.handleNameModal(interaction);
   }
 });
 
