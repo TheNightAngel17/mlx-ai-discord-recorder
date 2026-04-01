@@ -33,6 +33,7 @@ const {
 const { Recorder } = require("./recorder");
 const { PostProcessor } = require("./postProcessor");
 const { QueryHandler } = require("./queryHandler");
+const { SessionPanel } = require("./sessionPanel");
 
 // ---------------------------------------------------------------------------
 // Logging helper — matches Python bot format: YYYY-MM-DD HH:MM:SS [LEVEL] module: message
@@ -89,6 +90,13 @@ const commands = [
   new SlashCommandBuilder()
     .setName("mlx-ai")
     .setDescription("MLX AI Discord Recorder commands")
+    .addSubcommand(
+      new SlashCommandSubcommandBuilder()
+        .setName("new-session")
+        .setDescription(
+          "Open an interactive control panel to record and post-process a new session"
+        )
+    )
     .addSubcommandGroup(
       new SlashCommandSubcommandGroupBuilder()
         .setName("record")
@@ -286,6 +294,7 @@ const client = new Client({
 const recorder = new Recorder(config, makeLogger("recorder"));
 const postProcessor = new PostProcessor(config, makeLogger("postProcessor"));
 const queryHandler = new QueryHandler(config, makeLogger("queryHandler"));
+const sessionPanel = new SessionPanel(recorder, postProcessor, config, makeLogger("sessionPanel"));
 
 // ---------------------------------------------------------------------------
 // Register guild commands on startup
@@ -313,6 +322,11 @@ client.on("interactionCreate", async (interaction) => {
 
   const group = interaction.options.getSubcommandGroup(false);
   const sub = interaction.options.getSubcommand(false);
+
+  if (group === null && sub === "new-session") {
+    await sessionPanel.open(interaction);
+    return;
+  }
 
   if (group === "record") {
     if (sub === "start") {
@@ -365,6 +379,51 @@ client.on("interactionCreate", async (interaction) => {
 // Button + select menu routing for post-processing
 // ---------------------------------------------------------------------------
 client.on("interactionCreate", async (interaction) => {
+  // ── Session panel — channel select ────────────────────────────────────────
+  if (
+    interaction.isChannelSelectMenu() &&
+    interaction.customId.startsWith("panel_channel:")
+  ) {
+    await sessionPanel.handleChannelSelect(interaction);
+    return;
+  }
+
+  // ── Session panel — Set Session Name button ───────────────────────────────
+  if (
+    interaction.isButton() &&
+    interaction.customId.startsWith("panel_set_name:")
+  ) {
+    await sessionPanel.handleSetNameButton(interaction);
+    return;
+  }
+
+  // ── Session panel — Start Recording button ────────────────────────────────
+  if (
+    interaction.isButton() &&
+    interaction.customId.startsWith("panel_record:")
+  ) {
+    await sessionPanel.handleRecordButton(interaction);
+    return;
+  }
+
+  // ── Session panel — Stop Recording button ─────────────────────────────────
+  if (
+    interaction.isButton() &&
+    interaction.customId.startsWith("panel_stop:")
+  ) {
+    await sessionPanel.handleStopButton(interaction);
+    return;
+  }
+
+  // ── Session panel — Post-Process button ───────────────────────────────────
+  if (
+    interaction.isButton() &&
+    interaction.customId.startsWith("panel_post_process:")
+  ) {
+    await sessionPanel.handlePostProcessButton(interaction);
+    return;
+  }
+
   // ── Model select menu: post_process_model:<sessionName> ──────────────────
   if (interaction.isStringSelectMenu() && interaction.customId.startsWith("post_process_model:")) {
     const sessionName = interaction.customId.slice("post_process_model:".length);
@@ -442,6 +501,17 @@ client.on("interactionCreate", async (interaction) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// Modal submit routing
+// ---------------------------------------------------------------------------
+client.on("interactionCreate", async (interaction) => {
+  if (!interaction.isModalSubmit()) return;
+
+  // ── Session panel — session name modal ────────────────────────────────────
+  if (interaction.customId.startsWith("panel_name:")) {
+    await sessionPanel.handleNameModal(interaction);
+  }
+});
 
 client.on("voiceStateUpdate", (oldState, newState) => {
   recorder.onVoiceStateUpdate(oldState, newState);

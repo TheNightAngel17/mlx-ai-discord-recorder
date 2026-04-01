@@ -12,6 +12,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **`/mlx-ai new-session` command** — Opens an interactive, ephemeral session control panel in Discord with:
+  - Voice channel selector drop-down to choose where to record
+  - **✏️ Set Session Name** button that opens a modal text input
+  - **⏺ Start Recording** / **⏹ Stop Recording** toggle button
+  - **⚙️ Post-Process** button (enabled after recording stops)
+  - Inline status log showing live progress for each operation
+- **`js-bot/sessionPanel.js`** — New `SessionPanel` class implementing the full panel state machine (idle → ready → recording → stopping → stopped → processing → done), embed rendering, and all interaction handlers (channel select, modal submit, record/stop/post-process buttons)
 - **js-bot/** — Discord voice recording bot built on `discord.js` + `@discordjs/voice` with native DAVE/E2EE support
   - Per-user WAV recording with silence padding for time-aligned audio
   - Slash commands: `/mlx-ai record`, `/mlx-ai post-process`, `/mlx-ai merge-audio`, `/mlx-ai vectorize`, `/mlx-ai query`
