@@ -20,6 +20,7 @@ const {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
+  ChannelType,
   Client,
   GatewayIntentBits,
   REST,
@@ -101,6 +102,10 @@ const commands = [
                 .setName("voice_channel")
                 .setDescription("The voice channel to record")
                 .setRequired(true)
+                .addChannelTypes(
+                  ChannelType.GuildVoice,
+                  ChannelType.GuildStageVoice
+                )
             )
             .addStringOption((opt) =>
               opt
