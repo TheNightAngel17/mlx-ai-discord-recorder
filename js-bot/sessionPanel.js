@@ -626,12 +626,15 @@ class SessionPanel {
         true
       );
 
-      // If post-processing completed successfully, post a public (non-ephemeral)
-      // completion notice so the whole channel can see the session is ready.
+      // If post-processing completed successfully, post the full DONE embed as a
+      // public (non-ephemeral) message so the whole channel can see the session
+      // summary.  Discord does not allow converting an ephemeral message to
+      // public, so we post a new message containing the same embed content.
       if (state.status === STATUS.DONE) {
         try {
+          const { embed: doneEmbed } = this._buildPanel(panelId, state);
           await interaction.followUp({
-            content: `✅ Post-processing complete for session \`${state.sessionFolderName}\``,
+            embeds: [doneEmbed],
             ephemeral: false,
           });
         } catch (followUpErr) {
