@@ -55,3 +55,14 @@ ollama_base_url: http://localhost:11434    # Ollama API base URL
 # API keys for cloud providers go in .env — never in this file:
 #   OPENAI_API_KEY=sk-...
 #   ANTHROPIC_API_KEY=sk-ant-...
+
+# Session summary settings
+# auto_summarize: when true, process.py automatically runs summarize.py after vectorization.
+#   Set to false to skip automatic summarization (you can still run summarize.py manually).
+auto_summarize: true
+# summary_max_tokens: approximate token budget for the LLM when generating session summaries.
+#   Controls how long the summary output is. Larger values produce more detailed summaries
+#   but require more context window capacity from the chat model.
+#   Also controls input truncation: the transcript is truncated to ~(summary_max_tokens × 64)
+#   characters before being sent to the LLM (e.g. 2000 → ~128 000 chars of input allowed).
+summary_max_tokens: 2000

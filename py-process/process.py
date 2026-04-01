@@ -5,7 +5,9 @@ process.py — Post-processing orchestrator for recorded Discord sessions.
 This is the main entry point called by the JS bot after a recording ends.
 It coordinates all post-processing steps in order:
     1. Transcription (via transcribe.py)
-    (future steps will be added here)
+    2. Merge audio (via merge_audio.py)
+    3. Vectorize transcript (via vectorize.py)
+    4. Summarize session (via summarize.py) — only when auto_summarize: true in config.yaml
 
 Usage:
     python process.py <session_name> [--model <size>] [--language <lang>]
@@ -19,6 +21,18 @@ import argparse
 import subprocess
 import sys
 from pathlib import Path
+
+import yaml
+
+
+def load_config() -> dict:
+    """Load config.yaml from the repo root (one level up from py-process/)."""
+    config_path = Path(__file__).resolve().parent.parent / "config.yaml"
+    if not config_path.exists():
+        print(f"Warning: config.yaml not found at {config_path}", file=sys.stderr)
+        return {}
+    with open(config_path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
 
 
 def run_step(label: str, command: list[str]) -> None:
@@ -55,11 +69,14 @@ def main():
     )
     args = parser.parse_args()
 
+    config = load_config()
+
     # Resolve paths to sibling scripts (same directory as this script)
     script_dir = Path(__file__).resolve().parent
     transcribe_script = script_dir / "transcribe.py"
     merge_audio_script = script_dir / "merge_audio.py"
     vectorize_script = script_dir / "vectorize.py"
+    summarize_script = script_dir / "summarize.py"
 
     # -------------------------------------------------------------------
     # Step 1: Transcription
@@ -85,9 +102,16 @@ def main():
     run_step("Vectorize transcript", vectorize_cmd)
 
     # -------------------------------------------------------------------
-    # Future steps go here, e.g.:
-    #   run_step("Summarisation", [...])
+    # Step 4: Summarize session (optional — gated on auto_summarize config)
     # -------------------------------------------------------------------
+    auto_summarize = config.get("auto_summarize", True)
+    if auto_summarize:
+        summarize_cmd = [sys.executable, str(summarize_script), args.session]
+        run_step("Generate session summary", summarize_cmd)
+    else:
+        print(f"\n{'=' * 60}")
+        print("  Step: Generate session summary — SKIPPED (auto_summarize: false)")
+        print(f"{'=' * 60}\n")
 
     print(f"\n{'=' * 60}")
     print("  Post-processing complete.")

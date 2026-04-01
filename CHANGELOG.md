@@ -12,6 +12,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **py-process/summarize.py** — New standalone summarization script (Phase 6):
+  - Reads `_combined_transcript.txt` and sends it to the configured chat provider (Ollama, OpenAI, or Anthropic) with a structured system prompt
+  - LLM generates a narrative summary (2–4 paragraphs), key moments with timestamps and categories (`combat`, `plot_reveal`, `npc_introduction`, `funny_moment`, `decision_point`), and lists of NPCs, locations, and items
+  - Outputs `_session_summary.json` (structured) and `_session_summary.md` (human-readable) to the session folder
+  - Stores the narrative summary (`type=summary`) and each key moment (`type=key_moment`) as ChromaDB chunks for improved cross-session RAG quality
+  - CLI: `python summarize.py <session_name>` or `python summarize.py --all`
+- **py-process/process.py** — Integrated `summarize.py` as Step 4 of the post-processing pipeline (runs after vectorization when `auto_summarize: true`)
+- **js-bot/postProcessor.js** — After successful post-processing, reads `_session_summary.md` and posts it to the configured announce channel (split across messages if needed to stay within Discord's 2000-char limit)
+- **config.yaml** — Added `auto_summarize: true` and `summary_max_tokens: 2000` settings
+
 - **js-bot/** — Discord voice recording bot built on `discord.js` + `@discordjs/voice` with native DAVE/E2EE support
   - Per-user WAV recording with silence padding for time-aligned audio
   - Slash commands: `/mlx-ai record`, `/mlx-ai post-process`, `/mlx-ai merge-audio`, `/mlx-ai vectorize`, `/mlx-ai query`

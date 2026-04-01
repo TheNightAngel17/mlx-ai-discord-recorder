@@ -1,6 +1,6 @@
 # py-process — Audio Processing Pipeline
 
-The Python audio processing pipeline that handles transcription, audio merging, and vector embedding for recorded Discord sessions.
+The Python audio processing pipeline that handles transcription, audio merging, vector embedding, and session summarization for recorded Discord sessions.
 
 > **↩️ Back to [main README](../README.md)** | See also: [js-bot](../js-bot/README.md) · [py-query](../py-query/README.md)
 
@@ -17,6 +17,7 @@ The Python audio processing pipeline that handles transcription, audio merging, 
   - [transcribe.py — Whisper Transcription](#transcribepy--whisper-transcription)
   - [merge\_audio.py — Audio Mixing & Compression](#merge_audiopy--audio-mixing--compression)
   - [vectorize.py — Transcript Vectorization](#vectorizepy--transcript-vectorization)
+  - [summarize.py — Session Summarization](#summarizepy--session-summarization)
   - [vectordb\_helper.py — Vector DB Management](#vectordb_helperpy--vector-db-management)
 - [Configuration Reference](#configuration-reference)
 - [Whisper Model Sizes](#whisper-model-sizes)
@@ -36,11 +37,12 @@ recordings/
     └── playerone.wav
 ```
 
-This pipeline processes those recordings through three stages:
+This pipeline processes those recordings through four stages:
 
 1. **Transcribe** — Whisper speech-to-text → per-user `.txt` files + merged `_combined_transcript.txt`
 2. **Merge Audio** — Overlay all per-user WAVs → `_session_mix.wav` + `_session_mix.mp3`
 3. **Vectorize** — Chunk and embed the combined transcript → ChromaDB for RAG queries
+4. **Summarize** — LLM-generated structured summary → `_session_summary.json` + `_session_summary.md` (and ChromaDB chunks)
 
 ---
 
@@ -120,9 +122,9 @@ python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}'); print(f'GP
 
 ### `process.py` — Full Pipeline Orchestrator
 
-Runs all three processing steps in order for a single session. This is the script the JS bot calls when you use `/mlx-ai post-process start`.
+Runs all four processing steps in order for a single session. This is the script the JS bot calls when you use `/mlx-ai post-process start`.
 
-If any step fails, the pipeline halts immediately.
+If any step fails, the pipeline halts immediately. Step 4 (summarize) can be disabled by setting `auto_summarize: false` in `config.yaml`.
 
 #### Usage
 
@@ -294,6 +296,76 @@ python vectorize.py 20260330_143000_Campaign1_Session4 --force
 
 ---
 
+### `summarize.py` — Session Summarization
+
+Reads `_combined_transcript.txt` for a session, sends it to the configured chat LLM, and generates a structured summary with key moments, NPCs, locations, and items.
+
+Outputs are written to the session folder:
+- `_session_summary.json` — Structured JSON (narrative, key moments, entities)
+- `_session_summary.md` — Human-readable markdown (posted to the Discord announce channel)
+
+The summary narrative and each key moment are also stored as ChromaDB chunks with `type=summary` / `type=key_moment` metadata, improving cross-session RAG query quality.
+
+#### Prerequisites
+
+1. The configured **chat model** must be running (Ollama) or have a valid API key (OpenAI/Anthropic). See the [LLM Provider Settings](#configuration-reference) section below.
+2. The configured **embedding model** must be running (Ollama) or have a valid API key (OpenAI). Used to embed the summary chunks into ChromaDB.
+3. A completed transcription — `_combined_transcript.txt` must exist in the session folder.
+
+#### Usage
+
+```bash
+# Summarize a single session
+python summarize.py <session_name>
+
+# Summarize all sessions
+python summarize.py --all
+```
+
+#### Terminal Example
+
+```bash
+python summarize.py 20260330_143000_Campaign1_Session4
+```
+
+#### Example Output
+
+```
+Session: 20260330_143000_Campaign1_Session4
+  Transcript: 42381 chars, 3 speaker(s)
+  Sending transcript to ollama (llama3.2)…
+  Written: _session_summary.json
+  Written: _session_summary.md
+  Embedding narrative summary… done (1.2s)
+  Embedding key moment 1/5… done (0.8s)
+  Embedding key moment 2/5… done (0.9s)
+  Embedding key moment 3/5… done (0.7s)
+  Embedding key moment 4/5… done (0.8s)
+  Embedding key moment 5/5… done (0.9s)
+  Stored 6 summary chunk(s) in ChromaDB collection 'dnd_sessions'.
+```
+
+#### Key Moment Categories
+
+| Category | Emoji | Description |
+|----------|-------|-------------|
+| `combat` | ⚔️ | Battle encounters and fight sequences |
+| `plot_reveal` | 🔮 | Story revelations and plot twists |
+| `npc_introduction` | 🧙 | Introduction of a new NPC |
+| `funny_moment` | 😄 | Memorable humorous events |
+| `decision_point` | 🎲 | Significant choices made by the party |
+
+#### Config Options (`config.yaml`)
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `auto_summarize` | `true` | Run `summarize.py` automatically after vectorization in `process.py` |
+| `summary_max_tokens` | `2000` | Approximate token budget for the LLM summary output |
+| `chat_provider` | `ollama` | LLM backend for summarization: `ollama`, `openai`, or `anthropic` |
+| `chat_model` | `llama3.2` | Chat model name |
+
+---
+
 ### `vectordb_helper.py` — Vector DB Management
 
 CLI tool for inspecting, searching, and managing the ChromaDB collection. Useful for verifying what has been vectorized, running quick semantic searches, and cleaning up data.
@@ -382,9 +454,14 @@ All configuration is in the root `config.yaml`. The fields relevant to `py-proce
 | `mp3_bitrate` | `"128k"` | MP3 compression bitrate |
 | `keep_wav` | `true` | Keep original WAV files after MP3 export |
 | `vector_db_directory` | `./vectordb` | ChromaDB persistence directory |
+| `embedding_provider` | `ollama` | Embedding backend: `ollama` or `openai` |
 | `embedding_model` | `nomic-embed-text` | Embedding model name |
 | `chunk_minutes` | `3` | Time-window for transcript chunking (minutes) |
+| `chat_provider` | `ollama` | Chat LLM backend: `ollama`, `openai`, or `anthropic` |
+| `chat_model` | `llama3.2` | Chat model name (used by `summarize.py`) |
 | `ollama_base_url` | `http://localhost:11434` | Ollama API URL |
+| `auto_summarize` | `true` | Automatically run `summarize.py` after vectorization in `process.py` |
+| `summary_max_tokens` | `2000` | Approximate token budget for the LLM when generating session summaries |
 
 ---
 
@@ -413,7 +490,9 @@ recordings/
     ├── playerone.txt
     ├── _combined_transcript.txt         # All users merged chronologically
     ├── _session_mix.wav                 # Combined WAV (all users mixed)
-    └── _session_mix.mp3                 # Compressed combined audio
+    ├── _session_mix.mp3                 # Compressed combined audio
+    ├── _session_summary.json            # Structured summary (narrative, key moments, entities)
+    └── _session_summary.md              # Human-readable markdown summary
 ```
 
 Vector embeddings are stored separately in `vector_db_directory` (default: `./vectordb`).
