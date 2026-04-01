@@ -134,7 +134,11 @@ Triggers `py-process/vectorize.py` to chunk, embed, and store transcripts in Chr
 
 ### RAG Query
 
-Triggers `py-query/query.py` to answer natural-language questions about recorded sessions.
+Sends a query to the always-on `py-query/app.py` FastAPI service and returns the LLM answer. **The API must be running before this command works.** Start it with:
+
+```bash
+cd py-query && uvicorn app:app --host 0.0.0.0 --port 8100
+```
 
 | Command | Description |
 |---------|-------------|
@@ -154,7 +158,7 @@ Triggers `py-query/query.py` to answer natural-language questions about recorded
 - **Mid-session joins** — Users who join after recording starts are detected and recorded; an announcement is sent to the configured text channel
 - **Silence padding** — Per-user WAV files include silence for gaps when the user isn't speaking, keeping all files time-aligned
 - **Post-process button** — When a recording stops, the bot posts a message with a model selector and a "Start Processing" button for one-click post-processing
-- **Python spawning** — All Python scripts are spawned from the repo root, using the `.venv` Python if present, falling back to system `python`
+- **Python spawning** — All Python scripts are spawned from the repo root, using the `.venv` Python if present, falling back to system `python`. The exception is RAG queries, which call the always-on `py-query/app.py` HTTP API via `fetch()` instead of spawning a subprocess.
 - **Concurrency guards** — Only one recording, one post-processing job, one merge, and one vectorize job can run at a time
 
 ---
@@ -213,4 +217,4 @@ recordings/
 | `bot.js` | **Entry point.** Loads config/env, creates the Discord client, registers slash commands as guild commands on startup, and routes all interactions (`/mlx-ai` subcommands, buttons, select menus) to the appropriate handler. |
 | `recorder.js` | **Voice recording logic.** Manages the voice connection lifecycle: joining channels, subscribing to per-user Opus audio streams, decoding to PCM via prism-media, padding silence for gaps, writing temporary PCM files, and converting to WAV on stop. Handles auto-stop and mid-session join detection. |
 | `postProcessor.js` | **Python script spawner.** Spawns `py-process/process.py`, `merge_audio.py`, and `vectorize.py` as child processes. Tracks running state for each operation independently and reports results back to Discord. |
-| `queryHandler.js` | **RAG query handler.** Spawns `py-query/query.py` with the user's question and options. Parses the structured stdout output and formats it into a clean Discord reply with answer, timings, and optional sources. |
+| `queryHandler.js` | **RAG query handler.** Calls the `py-query/app.py` FastAPI service via `fetch()` with the user's question and options. Formats the JSON response (answer, timings, optional sources) into a clean Discord reply. Handles API-down and timeout errors gracefully. |

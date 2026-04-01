@@ -12,6 +12,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **py-query/app.py** — Always-on FastAPI RAG API service with three endpoints:
+  - `POST /api/query` — accepts `{question, session?, top_k?, show_sources?}`, returns `{answer, sources[], timings}`
+  - `GET /api/sessions` — lists all indexed session names from ChromaDB
+  - `GET /api/health` — returns ChromaDB status, chunk count, and provider info
+  - Config, providers, and ChromaDB are loaded once at startup for zero cold-start per query
+- **config.yaml** — Added `query_api_host: 0.0.0.0` and `query_api_port: 8100` settings
 - **js-bot/** — Discord voice recording bot built on `discord.js` + `@discordjs/voice` with native DAVE/E2EE support
   - Per-user WAV recording with silence padding for time-aligned audio
   - Slash commands: `/mlx-ai record`, `/mlx-ai post-process`, `/mlx-ai merge-audio`, `/mlx-ai vectorize`, `/mlx-ai query`
@@ -34,6 +40,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **js-bot/queryHandler.js** — Replaced `child_process.spawn(query.py)` with a `fetch()` call to `http://localhost:<query_api_port>/api/query`. Eliminates ~1–2 s cold-start per query. Handles API-down and timeout errors gracefully with user-friendly Discord messages.
+- **py-query/rag.py** — `query_rag()` now accepts optional `embedding_provider`, `chat_provider`, and `chroma_client` parameters so the API can pass pre-initialised objects (CLI path unchanged — passes nothing, creates fresh objects).
+- **py-query/requirements.txt** — Added `fastapi>=0.111.0` and `uvicorn[standard]>=0.29.0`
 - Upgraded `@discordjs/voice` to ^0.19.2 for DAVE protocol support
 - Codebase cleanup: moved inline `require()` calls to top-level imports, added comprehensive JSDoc comments
 
