@@ -51,7 +51,7 @@ const COLORS = {
 
 /** Human-readable status description */
 const STATUS_LABELS = {
-  [STATUS.IDLE]:       "⚪ Click **✏️ Edit Session Details** to get started.",
+  [STATUS.IDLE]:       "⚪ Set a session name and select a voice channel to begin.",
   [STATUS.READY]:      "🟡 Ready — press **⏺ Start Recording** to begin.",
   [STATUS.RECORDING]:  "🔴 Recording in progress…",
   [STATUS.STOPPING]:   "🟠 Stopping — saving WAV files…",
@@ -111,14 +111,13 @@ class SessionPanel {
    * Build the Discord embed and component rows for the current panel state.
    *
    * Layout varies by status (progressive disclosure):
-   *   IDLE (no name)      → [✏️ Edit Session Details]
-   *   IDLE (name, no ch)  → channel dropdown  +  [✏️ Edit Session Details]
-   *   READY               → [✏️ Edit Session Details]  +  [⏺ Start Recording]
+   *   IDLE                → channel dropdown  +  [✏️ Edit Session Details] (green if no name)
+   *   READY               → channel dropdown  +  [✏️ Edit Session Details]  +  [⏺ Start Recording]
    *   RECORDING           → [⏹ Stop Recording]
    *   STOPPING            → [⏹ Stopping… (disabled)]
-   *   STOPPED             → model dropdown  +  [⚙️ Post-Process]
+   *   STOPPED             → model dropdown  +  [⚙️ Post-Process] (green)
    *   PROCESSING          → model dropdown (disabled)  +  [⏳ Processing… (disabled)]
-   *   DONE                → model dropdown (disabled)  +  [✅ Complete (disabled)]
+   *   DONE                → (no components — clean embed only)
    *
    * @param {string} panelId
    * @param {object} state
@@ -156,44 +155,36 @@ class SessionPanel {
 
     const rows = [];
 
-    if (status === STATUS.IDLE) {
-      // After a name is set, reveal the channel dropdown as a guided "step 2".
-      // Before the name is set, only the "Edit Session Details" button is shown.
-      if (sessionName && !channelId) {
+    if (status === STATUS.IDLE || status === STATUS.READY) {
+      // Reusable channel dropdown (shown in IDLE and READY)
+      const channelRow = new ActionRowBuilder().addComponents(
+        new ChannelSelectMenuBuilder()
+          .setCustomId(`panel_channel:${panelId}`)
+          .setPlaceholder(channelName ? `Voice channel: #${channelName}` : "Select a voice channel…")
+          .addChannelTypes(ChannelType.GuildVoice, ChannelType.GuildStageVoice)
+      );
+
+      // Edit button — green when no name set yet (draws attention), grey once a name is set
+      const editRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`panel_set_name:${panelId}`)
+          .setLabel("✏️ Edit Session Details")
+          .setStyle(sessionName ? ButtonStyle.Secondary : ButtonStyle.Success)
+      );
+
+      rows.push(channelRow);
+      rows.push(editRow);
+
+      if (status === STATUS.READY) {
         rows.push(
           new ActionRowBuilder().addComponents(
-            new ChannelSelectMenuBuilder()
-              .setCustomId(`panel_channel:${panelId}`)
-              .setPlaceholder("Step 2: Select a voice channel…")
-              .addChannelTypes(ChannelType.GuildVoice, ChannelType.GuildStageVoice)
+            new ButtonBuilder()
+              .setCustomId(`panel_record:${panelId}`)
+              .setLabel("⏺ Start Recording")
+              .setStyle(ButtonStyle.Success)
           )
         );
       }
-      rows.push(
-        new ActionRowBuilder().addComponents(
-          new ButtonBuilder()
-            .setCustomId(`panel_set_name:${panelId}`)
-            .setLabel("✏️ Edit Session Details")
-            .setStyle(ButtonStyle.Secondary)
-        )
-      );
-    } else if (status === STATUS.READY) {
-      rows.push(
-        new ActionRowBuilder().addComponents(
-          new ButtonBuilder()
-            .setCustomId(`panel_set_name:${panelId}`)
-            .setLabel("✏️ Edit Session Details")
-            .setStyle(ButtonStyle.Secondary)
-        )
-      );
-      rows.push(
-        new ActionRowBuilder().addComponents(
-          new ButtonBuilder()
-            .setCustomId(`panel_record:${panelId}`)
-            .setLabel("⏺ Start Recording")
-            .setStyle(ButtonStyle.Success)
-        )
-      );
     } else if (status === STATUS.RECORDING) {
       rows.push(
         new ActionRowBuilder().addComponents(
@@ -213,13 +204,9 @@ class SessionPanel {
             .setDisabled(true)
         )
       );
-    } else if (
-      status === STATUS.STOPPED ||
-      status === STATUS.PROCESSING ||
-      status === STATUS.DONE
-    ) {
+    } else if (status === STATUS.STOPPED || status === STATUS.PROCESSING) {
       const modelValue = whisperModel || this.config.whisper_model || "base";
-      const modelLocked = status === STATUS.PROCESSING || status === STATUS.DONE;
+      const modelLocked = status === STATUS.PROCESSING;
 
       rows.push(
         new ActionRowBuilder().addComponents(
@@ -237,21 +224,17 @@ class SessionPanel {
         )
       );
 
-      const postLabel =
-        status === STATUS.DONE        ? "✅ Post-Processing Complete" :
-        status === STATUS.PROCESSING  ? "⏳ Processing…"              :
-                                        "⚙️ Post-Process";
-
       rows.push(
         new ActionRowBuilder().addComponents(
           new ButtonBuilder()
             .setCustomId(`panel_post_process:${panelId}`)
-            .setLabel(postLabel)
-            .setStyle(status === STATUS.DONE ? ButtonStyle.Secondary : ButtonStyle.Primary)
+            .setLabel(status === STATUS.PROCESSING ? "⏳ Processing…" : "⚙️ Post-Process")
+            .setStyle(status === STATUS.PROCESSING ? ButtonStyle.Secondary : ButtonStyle.Success)
             .setDisabled(status !== STATUS.STOPPED || !sessionFolderName)
         )
       );
     }
+    // DONE: no components — clean embed only
 
     return { embed, rows };
   }

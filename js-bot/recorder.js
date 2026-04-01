@@ -517,7 +517,7 @@ class Recorder {
     const member = newState.member || oldState.member;
     if (!member) return;
 
-    // Mid-session join announcement
+    // Mid-session join — log internally only (no announce-channel message)
     if (
       newState.channelId === this.recordingChannel?.id &&
       oldState.channelId !== newState.channelId
@@ -525,13 +525,6 @@ class Recorder {
       this.logger.info(
         `${member.user.username} joined mid-session — now recording them.`
       );
-      this._getAnnounceChannel(newState.guild).then((ch) => {
-        if (ch) {
-          ch.send(
-            `Now recording \`${member.user.username}\` who joined mid-session`
-          );
-        }
-      });
     }
 
     // Auto-stop when all humans leave
