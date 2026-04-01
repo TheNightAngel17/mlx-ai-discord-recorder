@@ -20,7 +20,7 @@ The JS bot is the only runtime process. It spawns Python scripts as child proces
 
 - **Minimal dependencies.** Add new packages only when clearly justified. Prefer the standard library and existing tools.
 - **Security by default.** Secrets in `.env` only. No shell injection. Sanitize all user input used in file paths. See [`.github/instructions/security.instructions.md`](.github/instructions/security.instructions.md).
-- **Documentation is a deliverable.** Every code change ships with the corresponding README, CHANGELOG, and config updates. See [`.github/instructions/docs.instructions.md`](.github/instructions/docs.instructions.md).
+- **Documentation is a deliverable.** Every code change ships with the corresponding README and config updates.
 - **Single bot replica.** Discord's gateway is stateful — never scale horizontally or add load balancers.
 - **Spawn, never exec.** Python scripts are called via `child_process.spawn()` with argument arrays. No `shell=True` anywhere in the pipeline.
 
@@ -50,6 +50,6 @@ Detailed, automatically-enforced rules live in `.github/instructions/`. Copilot 
 | JS bot coding rules | `.github/instructions/js-bot.instructions.md` |
 | Python processing pipeline rules | `.github/instructions/py-process.instructions.md` |
 | RAG query service rules | `.github/instructions/py-query.instructions.md` |
-| Documentation / config / changelog rules | `.github/instructions/docs.instructions.md` |
 | Security checklist | `.github/instructions/security.instructions.md` |
-| README formatting or CHANGELOG format | `.github/prompts/updateReadme.prompt.md` / `.github/prompts/updateChangelog.prompt.md` |
+| Documentation / config rules | `.github/instructions/docs.instructions.md` |
+| README formatting | `.github/prompts/updateReadme.prompt.md` |
