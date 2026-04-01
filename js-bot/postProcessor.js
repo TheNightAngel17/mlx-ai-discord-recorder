@@ -35,8 +35,10 @@ class PostProcessor {
    * @param {string} sessionName
    * @param {string} model        Whisper model size (tiny|base|small|medium|large)
    * @param {string|null} language Language code or null for auto-detect
+   * @param {boolean} [silent=false]  When true, suppresses announce-channel messages.
+   *   Pass true when called from the session panel to avoid duplicate chat messages.
    */
-  async postProcess(interaction, sessionName, model, language) {
+  async postProcess(interaction, sessionName, model, language, silent = false) {
     // Guard: only one post-processing run at a time
     if (this.isProcessing) {
       await interaction.reply({
@@ -100,9 +102,9 @@ class PostProcessor {
       args.push("--language", language);
     }
 
-    // Announce start
+    // Announce start (skipped when called silently from the session panel)
     const announceChannel = await this._getAnnounceChannel(interaction.guild);
-    if (announceChannel) {
+    if (announceChannel && !silent) {
       await announceChannel.send(
         `Post-processing started for session \`${sessionName}\` (model: ${model}, language: ${language || "auto-detect"}, ${wavFiles.length} file(s))`
       );
@@ -167,7 +169,7 @@ class PostProcessor {
             content: replyContent.join("\n"),
           });
 
-          if (announceChannel) {
+          if (announceChannel && !silent) {
             await announceChannel.send(
               `✅ Post-processing complete for session \`${sessionName}\` — files saved to \`${sessionDir}\``
             );
@@ -181,7 +183,7 @@ class PostProcessor {
             content: `❌ Post-processing failed for session \`${sessionName}\`.\n\`\`\`\n${stderr.slice(0, 1500) || "Unknown error"}\n\`\`\``,
           });
 
-          if (announceChannel) {
+          if (announceChannel && !silent) {
             await announceChannel.send(
               `❌ Post-processing failed for session \`${sessionName}\``
             );

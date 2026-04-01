@@ -289,10 +289,11 @@ node bot.js
 
 Then use Discord slash commands:
 
-1. `/mlx-ai record start voice_channel:#DnD-Voice session_name:Campaign1_Session4` — Start recording
-2. `/mlx-ai record stop` — Stop recording (or just leave the channel — it auto-stops)
-3. `/mlx-ai post-process start session_name:20260330_143000_Campaign1_Session4` — Transcribe + merge + vectorize
-4. `/mlx-ai query ask question:What happened when the party entered the cave?` — Ask questions about recorded sessions
+1. `/mlx-ai new-session` — Open an interactive control panel to set the session name, choose a voice channel, start/stop recording, and run post-processing all from one place
+2. `/mlx-ai record start voice_channel:#DnD-Voice session_name:Campaign1_Session4` — Start recording (traditional command)
+3. `/mlx-ai record stop` — Stop recording (or just leave the channel — it auto-stops)
+4. `/mlx-ai post-process start session_name:20260330_143000_Campaign1_Session4` — Transcribe + merge + vectorize
+5. `/mlx-ai query ask question:What happened when the party entered the cave?` — Ask questions about recorded sessions
 
 ---
 
@@ -373,6 +374,7 @@ mlx-ai-discord-recorder/
 │   ├── recorder.js           # Voice recording logic (DAVE/E2EE support)
 │   ├── postProcessor.js      # Spawns Python scripts for processing pipeline
 │   ├── queryHandler.js       # Spawns py-query for RAG queries
+│   ├── sessionPanel.js       # Interactive /mlx-ai new-session control panel
 │   ├── package.json          # Node.js dependencies
 │   └── README.md             # JS bot documentation
 │

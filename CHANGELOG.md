@@ -12,6 +12,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **`/mlx-ai new-session` command** — Opens an interactive, ephemeral session control panel in Discord with:
+  - Voice channel selector drop-down to choose where to record
+  - **✏️ Set Session Name** button that opens a modal text input
+  - **⏺ Start Recording** / **⏹ Stop Recording** toggle button
+  - **⚙️ Post-Process** button (enabled after recording stops)
+  - Inline status log showing live progress for each operation
+- **`js-bot/sessionPanel.js`** — New `SessionPanel` class implementing the full panel state machine (idle → ready → recording → stopping → stopped → processing → done), embed rendering, and all interaction handlers (channel select, modal submit, record/stop/post-process buttons)
 - **py-query/app.py** — Always-on FastAPI RAG API service with three endpoints:
   - `POST /api/query` — accepts `{question, session?, top_k?, show_sources?}`, returns `{answer, sources[], timings}`
   - `GET /api/sessions` — lists all indexed session names from ChromaDB
