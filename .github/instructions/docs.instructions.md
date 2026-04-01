@@ -46,4 +46,4 @@ Detailed formatting rules and update procedures live in:
 
 - **`.github/prompts/updateReadme.prompt.md`** — Standardized README structure, cross-linking rules, formatting conventions
 
-Always reference this prompt when updating `README.md` files. It is the source of truth for formatting.
+Always reference `.github/prompts/updateReadme.prompt.md` (the update README prompt) when updating `README.md` files; it is the source of truth for formatting.
