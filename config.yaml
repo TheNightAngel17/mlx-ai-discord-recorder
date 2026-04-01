@@ -52,6 +52,11 @@ chat_model: llama3.2
 
 # Ollama settings (used when provider is "ollama")
 ollama_base_url: http://localhost:11434    # Ollama API base URL
+
+# RAG Query API settings (py-query/app.py)
+# Start the API with: uvicorn app:app --host 0.0.0.0 --port 8100
+query_api_host: 0.0.0.0    # Host the API server binds to (0.0.0.0 = all interfaces)
+query_api_port: 8100        # Port the API server listens on
 # API keys for cloud providers go in .env — never in this file:
 #   OPENAI_API_KEY=sk-...
 #   ANTHROPIC_API_KEY=sk-ant-...

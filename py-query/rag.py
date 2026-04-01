@@ -23,7 +23,12 @@ from pathlib import Path
 
 import chromadb
 
-from providers import get_chat_provider, get_embedding_provider
+from providers import (
+    ChatProvider,
+    EmbeddingProvider,
+    get_chat_provider,
+    get_embedding_provider,
+)
 
 COLLECTION_NAME = "dnd_sessions"
 
@@ -70,15 +75,24 @@ def query_rag(
     config: dict,
     session_filter: str | None = None,
     top_k: int = 5,
+    embedding_provider: EmbeddingProvider | None = None,
+    chat_provider: ChatProvider | None = None,
+    chroma_client: chromadb.ClientAPI | None = None,
 ) -> dict:
     """
     Run a RAG query against the ChromaDB vector database.
 
     Args:
-        question:       The user's question.
-        config:         Loaded config.yaml dict.
-        session_filter: Optional session name to restrict the search to.
-        top_k:          Number of chunks to retrieve (default: 5).
+        question:             The user's question.
+        config:               Loaded config.yaml dict.
+        session_filter:       Optional session name to restrict the search to.
+        top_k:                Number of chunks to retrieve (default: 5).
+        embedding_provider:   Pre-initialised embedding provider. If None, one is
+                              created from config on each call (CLI path).
+        chat_provider:        Pre-initialised chat provider. If None, one is
+                              created from config on each call (CLI path).
+        chroma_client:        Pre-initialised ChromaDB client. If None, a new
+                              PersistentClient is opened on each call (CLI path).
 
     Returns:
         {
@@ -93,33 +107,39 @@ def query_rag(
                     "distance": float,
                 },
                 ...
-            ]
+            ],
+            "timings": {
+                "embed_s": float,
+                "retrieval_s": float,
+                "chat_s": float,
+                "total_s": float,
+            }
         }
     """
-    vector_db_directory = config.get("vector_db_directory", "./vectordb")
+    # --- Open or reuse ChromaDB ---
+    if chroma_client is None:
+        vector_db_directory = config.get("vector_db_directory", "./vectordb")
+        db_path = Path(vector_db_directory)
+        if not db_path.exists():
+            print(
+                f"Error: Vector DB directory not found: {db_path}\n"
+                "Have you run py-process/vectorize.py yet?",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
-    # --- Open ChromaDB ---
-    db_path = Path(vector_db_directory)
-    if not db_path.exists():
-        print(
-            f"Error: Vector DB directory not found: {db_path}\n"
-            "Have you run py-process/vectorize.py yet?",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+        chroma_client = chromadb.PersistentClient(path=str(db_path))
 
-    client = chromadb.PersistentClient(path=str(db_path))
+        existing = [c.name for c in chroma_client.list_collections()]
+        if COLLECTION_NAME not in existing:
+            print(
+                f"Error: ChromaDB collection '{COLLECTION_NAME}' does not exist.\n"
+                "Have you run py-process/vectorize.py yet?",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
-    existing = [c.name for c in client.list_collections()]
-    if COLLECTION_NAME not in existing:
-        print(
-            f"Error: ChromaDB collection '{COLLECTION_NAME}' does not exist.\n"
-            "Have you run py-process/vectorize.py yet?",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    collection = client.get_collection(COLLECTION_NAME)
+    collection = chroma_client.get_collection(COLLECTION_NAME)
     total = collection.count()
     if total == 0:
         print(
@@ -130,7 +150,8 @@ def query_rag(
         sys.exit(1)
 
     # --- Embed the question ---
-    embedding_provider = get_embedding_provider(config)
+    if embedding_provider is None:
+        embedding_provider = get_embedding_provider(config)
     t0 = time.perf_counter()
     query_embedding = embedding_provider.embed(question)
     embed_time = time.perf_counter() - t0
@@ -148,7 +169,6 @@ def query_rag(
     )
     retrieval_time = time.perf_counter() - t0
 
-    ids = results["ids"][0]
     docs = results["documents"][0]
     metas = results["metadatas"][0]
     distances = results["distances"][0]
@@ -181,7 +201,8 @@ def query_rag(
 
     # --- Generate answer ---
     system_prompt = _build_system_prompt(chunks_for_prompt)
-    chat_provider = get_chat_provider(config)
+    if chat_provider is None:
+        chat_provider = get_chat_provider(config)
     t0 = time.perf_counter()
     answer = chat_provider.chat(system_prompt=system_prompt, user_message=question)
     chat_time = time.perf_counter() - t0
