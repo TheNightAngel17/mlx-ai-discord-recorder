@@ -20,7 +20,6 @@ const {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
-  ChannelType,
   Client,
   GatewayIntentBits,
   REST,
@@ -103,88 +102,6 @@ const commands = [
               'A label for this session, e.g. "Campaign1_Session4"'
             )
             .setRequired(false)
-        )
-    )
-    .addSubcommandGroup(
-      new SlashCommandSubcommandGroupBuilder()
-        .setName("record")
-        .setDescription("Voice recording commands")
-        .addSubcommand(
-          new SlashCommandSubcommandBuilder()
-            .setName("start")
-            .setDescription("Join a voice channel and start recording")
-            .addChannelOption((opt) =>
-              opt
-                .setName("voice_channel")
-                .setDescription("The voice channel to record")
-                .setRequired(true)
-                .addChannelTypes(
-                  ChannelType.GuildVoice,
-                  ChannelType.GuildStageVoice
-                )
-            )
-            .addStringOption((opt) =>
-              opt
-                .setName("session_name")
-                .setDescription(
-                  'A label for this session, e.g. "Campaign1_Session4"'
-                )
-                .setRequired(true)
-            )
-        )
-        .addSubcommand(
-          new SlashCommandSubcommandBuilder()
-            .setName("stop")
-            .setDescription("Stop the current recording session")
-        )
-        .addSubcommand(
-          new SlashCommandSubcommandBuilder()
-            .setName("status")
-            .setDescription("Show the status of the current recording session")
-        )
-    )
-    .addSubcommandGroup(
-      new SlashCommandSubcommandGroupBuilder()
-        .setName("post-process")
-        .setDescription("Post-processing commands")
-        .addSubcommand(
-          new SlashCommandSubcommandBuilder()
-            .setName("start")
-            .setDescription("Run post-processing on a recording session")
-            .addStringOption((opt) =>
-              opt
-                .setName("session_name")
-                .setDescription(
-                  "The session folder name (e.g. 20260330_033020_test)"
-                )
-                .setRequired(true)
-            )
-            .addStringOption((opt) =>
-              opt
-                .setName("model")
-                .setDescription("Whisper model size (default: base)")
-                .setRequired(false)
-                .addChoices(
-                  { name: "tiny", value: "tiny" },
-                  { name: "base", value: "base" },
-                  { name: "small", value: "small" },
-                  { name: "medium", value: "medium" },
-                  { name: "large", value: "large" }
-                )
-            )
-            .addStringOption((opt) =>
-              opt
-                .setName("language")
-                .setDescription(
-                  "Language code (e.g. 'en'). Omit for auto-detect."
-                )
-                .setRequired(false)
-            )
-        )
-        .addSubcommand(
-          new SlashCommandSubcommandBuilder()
-            .setName("status")
-            .setDescription("Check if post-processing is currently running")
         )
     )
     .addSubcommandGroup(
@@ -337,28 +254,7 @@ client.on("interactionCreate", async (interaction) => {
     return;
   }
 
-  if (group === "record") {
-    if (sub === "start") {
-      const voiceChannel = interaction.options.getChannel("voice_channel");
-      const sessionName = interaction.options.getString("session_name");
-      await recorder.start(interaction, voiceChannel, sessionName);
-    } else if (sub === "stop") {
-      await recorder.stop(interaction);
-    } else if (sub === "status") {
-      await recorder.status(interaction);
-    }
-  } else if (group === "post-process") {
-    if (sub === "start") {
-      const sessionName = interaction.options.getString("session_name");
-      const defaultModel = config.whisper_model || "base";
-      const defaultLang = config.whisper_language === "auto" ? null : (config.whisper_language || null);
-      const model = interaction.options.getString("model") || defaultModel;
-      const language = interaction.options.getString("language") || defaultLang;
-      await postProcessor.postProcess(interaction, sessionName, model, language);
-    } else if (sub === "status") {
-      await postProcessor.status(interaction);
-    }
-  } else if (group === "merge-audio") {
+  if (group === "merge-audio") {
     if (sub === "start") {
       const sessionName = interaction.options.getString("session_name");
       await postProcessor.mergeAudio(interaction, sessionName);
@@ -397,7 +293,7 @@ client.on("interactionCreate", async (interaction) => {
     return;
   }
 
-  // ── Session panel — Set Session Name button ───────────────────────────────
+  // ── Session panel — Edit Session Details button ───────────────────────────
   if (
     interaction.isButton() &&
     interaction.customId.startsWith("panel_set_name:")
@@ -439,6 +335,15 @@ client.on("interactionCreate", async (interaction) => {
     interaction.customId.startsWith("panel_name:")
   ) {
     await sessionPanel.handleNameModal(interaction);
+    return;
+  }
+
+  // ── Session panel — Whisper model select ──────────────────────────────────
+  if (
+    interaction.isStringSelectMenu() &&
+    interaction.customId.startsWith("panel_model:")
+  ) {
+    await sessionPanel.handleModelSelect(interaction);
     return;
   }
 

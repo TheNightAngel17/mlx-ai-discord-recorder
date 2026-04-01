@@ -3,12 +3,13 @@
  *
  * Exports a SessionPanel class with:
  *   open(interaction)                  — /mlx-ai new-session: send the ephemeral panel
- *   handleChannelSelect(interaction)   — voice-channel select menu updated
- *   handleSetNameButton(interaction)   — "Set Session Name" button → show modal
+ *   handleChannelSelect(interaction)   — voice-channel select menu updated (IDLE guided step)
+ *   handleSetNameButton(interaction)   — "Edit Session Details" button → show modal
  *   handleNameModal(interaction)       — modal submitted with session name
  *   handleRecordButton(interaction)    — "⏺ Start Recording" button pressed
  *   handleStopButton(interaction)      — "⏹ Stop Recording" button pressed
  *   handlePostProcessButton(interaction) — "⚙️ Post-Process" button pressed
+ *   handleModelSelect(interaction)     — Whisper model dropdown changed (STOPPED state)
  */
 
 "use strict";
@@ -21,6 +22,7 @@ const {
   ChannelType,
   EmbedBuilder,
   ModalBuilder,
+  StringSelectMenuBuilder,
   TextInputBuilder,
   TextInputStyle,
 } = require("discord.js");
@@ -49,11 +51,11 @@ const COLORS = {
 
 /** Human-readable status description */
 const STATUS_LABELS = {
-  [STATUS.IDLE]:       "⚪ Click **✏️ Set Session Name** and select a voice channel to begin.",
+  [STATUS.IDLE]:       "⚪ Click **✏️ Edit Session Details** to get started.",
   [STATUS.READY]:      "🟡 Ready — press **⏺ Start Recording** to begin.",
   [STATUS.RECORDING]:  "🔴 Recording in progress…",
   [STATUS.STOPPING]:   "🟠 Stopping — saving WAV files…",
-  [STATUS.STOPPED]:    "🟢 Recording saved — press **⚙️ Post-Process** when ready.",
+  [STATUS.STOPPED]:    "🟢 Recording saved — select a Whisper model and press **⚙️ Post-Process**.",
   [STATUS.PROCESSING]: "⏳ Post-processing in progress…",
   [STATUS.DONE]:       "✅ Post-processing complete.",
 };
@@ -108,12 +110,22 @@ class SessionPanel {
   /**
    * Build the Discord embed and component rows for the current panel state.
    *
+   * Layout varies by status (progressive disclosure):
+   *   IDLE (no name)      → [✏️ Edit Session Details]
+   *   IDLE (name, no ch)  → channel dropdown  +  [✏️ Edit Session Details]
+   *   READY               → [✏️ Edit Session Details]  +  [⏺ Start Recording]
+   *   RECORDING           → [⏹ Stop Recording]
+   *   STOPPING            → [⏹ Stopping… (disabled)]
+   *   STOPPED             → model dropdown  +  [⚙️ Post-Process]
+   *   PROCESSING          → model dropdown (disabled)  +  [⏳ Processing… (disabled)]
+   *   DONE                → model dropdown (disabled)  +  [✅ Complete (disabled)]
+   *
    * @param {string} panelId
    * @param {object} state
    * @returns {{ embed: EmbedBuilder, rows: ActionRowBuilder[] }}
    */
   _buildPanel(panelId, state) {
-    const { channelName, sessionName, sessionFolderName, status, log } = state;
+    const { channelId, channelName, sessionName, sessionFolderName, status, log, whisperModel } = state;
 
     const embed = new EmbedBuilder()
       .setTitle("🎙️ Session Control Panel")
@@ -142,70 +154,106 @@ class SessionPanel {
       });
     }
 
-    // Controls are locked while an operation is in flight
-    const isLocked =
-      status === STATUS.RECORDING ||
-      status === STATUS.STOPPING ||
-      status === STATUS.PROCESSING;
+    const rows = [];
 
-    // Row 1 — Voice channel selector
-    const channelRow = new ActionRowBuilder().addComponents(
-      new ChannelSelectMenuBuilder()
-        .setCustomId(`panel_channel:${panelId}`)
-        .setPlaceholder(
-          channelName ? `Channel: #${channelName}` : "Select a voice channel…"
+    if (status === STATUS.IDLE) {
+      // After a name is set, reveal the channel dropdown as a guided "step 2".
+      // Before the name is set, only the "Edit Session Details" button is shown.
+      if (sessionName && !channelId) {
+        rows.push(
+          new ActionRowBuilder().addComponents(
+            new ChannelSelectMenuBuilder()
+              .setCustomId(`panel_channel:${panelId}`)
+              .setPlaceholder("Step 2: Select a voice channel…")
+              .addChannelTypes(ChannelType.GuildVoice, ChannelType.GuildStageVoice)
+          )
+        );
+      }
+      rows.push(
+        new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`panel_set_name:${panelId}`)
+            .setLabel("✏️ Edit Session Details")
+            .setStyle(ButtonStyle.Secondary)
         )
-        .addChannelTypes(ChannelType.GuildVoice, ChannelType.GuildStageVoice)
-        .setDisabled(isLocked)
-    );
-
-    // Row 2 — Set session name button
-    const labelText =
-      sessionName
-        ? `✏️ Name: ${sessionName.slice(0, 20)}${sessionName.length > 20 ? "…" : ""}`
-        : "✏️ Set Session Name";
-
-    const nameRow = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId(`panel_set_name:${panelId}`)
-        .setLabel(labelText)
-        .setStyle(ButtonStyle.Secondary)
-        .setDisabled(isLocked)
-    );
-
-    // Row 3 — Record / Stop   +   Post-Process
-    const canRecord =
-      !!channelName && !!sessionName && status === STATUS.READY;
-    const canStop = status === STATUS.RECORDING;
-    const canPostProcess =
-      (status === STATUS.STOPPED || status === STATUS.DONE) &&
-      !!sessionFolderName;
-
-    const recordOrStop =
-      status === STATUS.RECORDING
-        ? new ButtonBuilder()
-            .setCustomId(`panel_stop:${panelId}`)
-            .setLabel("⏹ Stop Recording")
-            .setStyle(ButtonStyle.Danger)
-            .setDisabled(!canStop)
-        : new ButtonBuilder()
+      );
+    } else if (status === STATUS.READY) {
+      rows.push(
+        new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`panel_set_name:${panelId}`)
+            .setLabel("✏️ Edit Session Details")
+            .setStyle(ButtonStyle.Secondary)
+        )
+      );
+      rows.push(
+        new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
             .setCustomId(`panel_record:${panelId}`)
             .setLabel("⏺ Start Recording")
             .setStyle(ButtonStyle.Success)
-            .setDisabled(!canRecord);
+        )
+      );
+    } else if (status === STATUS.RECORDING) {
+      rows.push(
+        new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`panel_stop:${panelId}`)
+            .setLabel("⏹ Stop Recording")
+            .setStyle(ButtonStyle.Danger)
+        )
+      );
+    } else if (status === STATUS.STOPPING) {
+      rows.push(
+        new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`panel_stop:${panelId}`)
+            .setLabel("⏹ Stopping…")
+            .setStyle(ButtonStyle.Danger)
+            .setDisabled(true)
+        )
+      );
+    } else if (
+      status === STATUS.STOPPED ||
+      status === STATUS.PROCESSING ||
+      status === STATUS.DONE
+    ) {
+      const modelValue = whisperModel || this.config.whisper_model || "base";
+      const modelLocked = status === STATUS.PROCESSING || status === STATUS.DONE;
 
-    const postProcessBtn = new ButtonBuilder()
-      .setCustomId(`panel_post_process:${panelId}`)
-      .setLabel("⚙️ Post-Process")
-      .setStyle(ButtonStyle.Primary)
-      .setDisabled(!canPostProcess);
+      rows.push(
+        new ActionRowBuilder().addComponents(
+          new StringSelectMenuBuilder()
+            .setCustomId(`panel_model:${panelId}`)
+            .setPlaceholder(`Whisper model: ${modelValue}`)
+            .addOptions([
+              { label: "tiny",   description: "Fastest, lowest accuracy",  value: "tiny",   default: modelValue === "tiny"   },
+              { label: "base",   description: "Fast, decent accuracy",      value: "base",   default: modelValue === "base"   },
+              { label: "small",  description: "Balanced",                   value: "small",  default: modelValue === "small"  },
+              { label: "medium", description: "Slower, higher accuracy",    value: "medium", default: modelValue === "medium" },
+              { label: "large",  description: "Slowest, best accuracy",     value: "large",  default: modelValue === "large"  },
+            ])
+            .setDisabled(modelLocked)
+        )
+      );
 
-    const actionRow = new ActionRowBuilder().addComponents(
-      recordOrStop,
-      postProcessBtn
-    );
+      const postLabel =
+        status === STATUS.DONE        ? "✅ Post-Processing Complete" :
+        status === STATUS.PROCESSING  ? "⏳ Processing…"              :
+                                        "⚙️ Post-Process";
 
-    return { embed, rows: [channelRow, nameRow, actionRow] };
+      rows.push(
+        new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`panel_post_process:${panelId}`)
+            .setLabel(postLabel)
+            .setStyle(status === STATUS.DONE ? ButtonStyle.Secondary : ButtonStyle.Primary)
+            .setDisabled(status !== STATUS.STOPPED || !sessionFolderName)
+        )
+      );
+    }
+
+    return { embed, rows };
   }
 
   /**
@@ -291,6 +339,7 @@ class SessionPanel {
       channelName: null,
       sessionName: sanitized,
       sessionFolderName: null,
+      whisperModel: this.config.whisper_model || "base",
       status: STATUS.IDLE,
       log: [],
     };
@@ -341,7 +390,9 @@ class SessionPanel {
   }
 
   /**
-   * "Set Session Name" button pressed — show a modal text input.
+   * "Edit Session Details" button pressed — show a modal text input for the session name.
+   * (Note: Discord modals only support text inputs, so the voice-channel selection
+   * remains in the panel as a guided "step 2" that appears after the name is set.)
    *
    * @param {import('discord.js').ButtonInteraction} interaction
    */
@@ -373,7 +424,7 @@ class SessionPanel {
 
     const modal = new ModalBuilder()
       .setCustomId(`panel_name:${panelId}`)
-      .setTitle("Set Session Name")
+      .setTitle("Edit Session Details")
       .addComponents(
         new ActionRowBuilder().addComponents(nameInput)
       );
@@ -468,7 +519,7 @@ class SessionPanel {
     );
 
     try {
-      await this.recorder.start(fakeInteraction, channel, state.sessionName);
+      await this.recorder.start(fakeInteraction, channel, state.sessionName, true);
 
       if (this.recorder.isRecording) {
         // Capture the full timestamped folder name that recorder created.
@@ -517,7 +568,7 @@ class SessionPanel {
     try {
       // Pass the guild (not the interaction) so recorder handles its own
       // announce-channel message; the panel reflects the final result below.
-      await this.recorder.stop(interaction.guild, false);
+      await this.recorder.stop(interaction.guild, false, true);
       state.status = STATUS.STOPPED;
       this._log(state, `Files saved to \`${state.sessionFolderName}\`.`);
     } catch (err) {
@@ -553,7 +604,7 @@ class SessionPanel {
       return;
     }
 
-    const defaultModel = this.config.whisper_model || "base";
+    const model = state.whisperModel || this.config.whisper_model || "base";
     const defaultLang =
       this.config.whisper_language === "auto"
         ? null
@@ -562,7 +613,7 @@ class SessionPanel {
     state.status = STATUS.PROCESSING;
     this._log(
       state,
-      `Starting post-processing (model: ${defaultModel})…`
+      `Starting post-processing (model: ${model})…`
     );
     const { embed, rows } = this._buildPanel(panelId, state);
     await interaction.update({ embeds: [embed], components: rows });
@@ -586,7 +637,7 @@ class SessionPanel {
       await this.postProcessor.postProcess(
         fakeInteraction,
         state.sessionFolderName,
-        defaultModel,
+        model,
         defaultLang
       );
     } catch (err) {
@@ -595,6 +646,27 @@ class SessionPanel {
       this._log(state, `Error: ${err.message.slice(0, 100)}`);
       await this._refreshPanel(interaction, panelId, state);
     }
+  }
+
+  /**
+   * Whisper model select menu updated (shown in the STOPPED state).
+   *
+   * @param {import('discord.js').StringSelectMenuInteraction} interaction
+   */
+  async handleModelSelect(interaction) {
+    const panelId = interaction.customId.slice("panel_model:".length);
+    const state = this.panels.get(panelId);
+    if (!state) {
+      await interaction.reply({
+        content: "⚠️ This panel has expired. Run `/mlx-ai new-session` to open a new one.",
+        ephemeral: true,
+      });
+      return;
+    }
+
+    state.whisperModel = interaction.values[0];
+    const { embed, rows } = this._buildPanel(panelId, state);
+    await interaction.update({ embeds: [embed], components: rows });
   }
 }
 
