@@ -18,7 +18,7 @@ applyTo: "js-bot/**"
 |---|---|---|
 | Variables / functions | camelCase | `sessionName`, `mergeAudio()` |
 | Classes | PascalCase | `Recorder`, `PostProcessor` |
-| Slash commands | kebab-case | `/mlx-ai merge-audio start` |
+| Slash commands | kebab-case | `/mlx-ai session`, `/mlx-ai ask` |
 | Session folders | `YYYYMMDD_HHMMSS_<name>` | `20260330_143000_Campaign1` |
 
 ## Logging

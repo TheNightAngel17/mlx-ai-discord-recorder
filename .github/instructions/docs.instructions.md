@@ -36,7 +36,7 @@ Every code change must include the corresponding documentation updates listed in
 - Use **GitHub-Flavored Markdown** (GFM).
 - Provide **both Bash and PowerShell** command examples in the root README.
 - Use tables for structured data (dependencies, config fields, command parameters).
-- Wrap inline file/command references in backticks: `config.yaml`, `transcribe.py`, `/mlx-ai record start`.
+- Wrap inline file/command references in backticks: `config.yaml`, `transcribe.py`, `/mlx-ai session`.
 - Use relative links between READMEs: `../README.md`, `./py-process/README.md`.
 - Every sub-project README must include navigation links back to root and to sibling sub-projects.
 
