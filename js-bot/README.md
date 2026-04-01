@@ -77,14 +77,16 @@ The recommended way to start a new recording session.
 
 | Command | Description |
 |---------|-------------|
-| `/mlx-ai new-session` | Open an interactive control panel with buttons to set the session name, select a voice channel, start/stop recording, and run post-processing |
+| `/mlx-ai new-session [session_name:<name>]` | Open an interactive control panel with buttons to set the session name, select a voice channel, start/stop recording, and run post-processing |
+
+Providing `session_name` is optional — if supplied, the panel opens with the name pre-filled. Otherwise, click **✏️ Set Session Name** (the blue button) to enter it.
 
 The panel is ephemeral (only visible to you) and contains:
 
 | Control | Description |
 |---------|-------------|
 | Voice channel selector | Drop-down to choose which voice channel to record |
-| **✏️ Set Session Name** | Opens a modal text input for the session name |
+| **✏️ Set Session Name** | Opens a modal text input for the session name (shown in blue until a name is set) |
 | **⏺ Start Recording** | Joins the selected channel and begins recording (enabled once name + channel are set) |
 | **⏹ Stop Recording** | Stops recording and saves WAV files (shown while recording) |
 | **⚙️ Post-Process** | Runs the full transcription → merge → vectorize pipeline (enabled after recording stops) |

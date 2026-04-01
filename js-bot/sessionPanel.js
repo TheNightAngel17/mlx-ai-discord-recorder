@@ -49,7 +49,7 @@ const COLORS = {
 
 /** Human-readable status description */
 const STATUS_LABELS = {
-  [STATUS.IDLE]:       "⚪ Set a session name and select a voice channel.",
+  [STATUS.IDLE]:       "⚪ Click **✏️ Set Session Name** and select a voice channel to begin.",
   [STATUS.READY]:      "🟡 Ready — press **⏺ Start Recording** to begin.",
   [STATUS.RECORDING]:  "🔴 Recording in progress…",
   [STATUS.STOPPING]:   "🟠 Stopping — saving WAV files…",
@@ -160,6 +160,8 @@ class SessionPanel {
     );
 
     // Row 2 — Set session name button
+    // Use Primary (blue) style when no name has been entered yet so it reads
+    // as a clear call-to-action; switch to Secondary (grey) once a name is set.
     const labelText =
       sessionName
         ? `✏️ Name: ${sessionName.slice(0, 20)}${sessionName.length > 20 ? "…" : ""}`
@@ -169,7 +171,7 @@ class SessionPanel {
       new ButtonBuilder()
         .setCustomId(`panel_set_name:${panelId}`)
         .setLabel(labelText)
-        .setStyle(ButtonStyle.Secondary)
+        .setStyle(sessionName ? ButtonStyle.Secondary : ButtonStyle.Primary)
         .setDisabled(isLocked)
     );
 
@@ -276,22 +278,34 @@ class SessionPanel {
    * Open the control panel in response to /mlx-ai new-session.
    *
    * @param {import('discord.js').ChatInputCommandInteraction} interaction
+   * @param {string|null} [sessionName]  Optional name supplied directly via the slash command option
    */
-  async open(interaction) {
+  async open(interaction, sessionName = null) {
     const panelId = this._newPanelId();
+
+    // Sanitize if a name was provided inline with the command
+    const sanitized = sessionName
+      ? (sessionName.replace(/[^\w-]/g, "_").replace(/^_+|_+$/g, "") || null)
+      : null;
+
     const state = {
       channelId: null,
       channelName: null,
-      sessionName: null,
+      sessionName: sanitized,
       sessionFolderName: null,
       status: STATUS.IDLE,
       log: [],
     };
+
+    if (sanitized) {
+      this._log(state, `Session name set to \`${sanitized}\`.`);
+    }
+
     this.panels.set(panelId, state);
 
     const { embed, rows } = this._buildPanel(panelId, state);
     await interaction.reply({ embeds: [embed], components: rows, ephemeral: true });
-    this.logger.info(`Session control panel opened (panelId=${panelId})`);
+    this.logger.info(`Session control panel opened (panelId=${panelId}, sessionName=${sanitized ?? "unset"})`);
   }
 
   // ---------------------------------------------------------------------------

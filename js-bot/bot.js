@@ -96,6 +96,14 @@ const commands = [
         .setDescription(
           "Open an interactive control panel to record and post-process a new session"
         )
+        .addStringOption((opt) =>
+          opt
+            .setName("session_name")
+            .setDescription(
+              'A label for this session, e.g. "Campaign1_Session4"'
+            )
+            .setRequired(false)
+        )
     )
     .addSubcommandGroup(
       new SlashCommandSubcommandGroupBuilder()
@@ -324,7 +332,8 @@ client.on("interactionCreate", async (interaction) => {
   const sub = interaction.options.getSubcommand(false);
 
   if (group === null && sub === "new-session") {
-    await sessionPanel.open(interaction);
+    const sessionName = interaction.options.getString("session_name") ?? null;
+    await sessionPanel.open(interaction, sessionName);
     return;
   }
 
