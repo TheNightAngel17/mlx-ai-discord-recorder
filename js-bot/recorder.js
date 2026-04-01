@@ -163,6 +163,13 @@ class Recorder {
 
     // userId -> { username, opusStream, decoder, fileStream, pcmPath }
     this.audioBuffers = new Map();
+
+    /**
+     * Optional callback invoked when a user joins mid-session.
+     * Set by SessionPanel to surface the event in the panel log.
+     * @type {((username: string) => void) | null}
+     */
+    this.onMidSessionJoin = null;
   }
 
   // -------------------------------------------------------------------------
@@ -175,8 +182,10 @@ class Recorder {
    * @param {import('discord.js').ChatInputCommandInteraction} interaction
    * @param {import('discord.js').VoiceChannel} voiceChannel
    * @param {string} sessionName
+   * @param {boolean} [silent=false]  When true, suppresses the announce-channel message.
+   *   Pass true when called from the session panel to avoid duplicate chat messages.
    */
-  async start(interaction, voiceChannel, sessionName) {
+  async start(interaction, voiceChannel, sessionName, silent = false) {
     if (this.isRecording) {
       await interaction.reply({
         content: "Already recording! Use `/mlx-ai record stop` first.",
@@ -294,12 +303,14 @@ class Recorder {
       `Recording started: ${folderName} in voice channel '${voiceChannel.name}'`
     );
 
-    // Announce in text channel
-    const announceChannel = await this._getAnnounceChannel(voiceChannel.guild);
-    if (announceChannel) {
-      await announceChannel.send(
-        `Recording started in \`${voiceChannel.name}\` — Session: \`${folderName}\``
-      );
+    // Announce in text channel (skipped when called silently from the session panel)
+    if (!silent) {
+      const announceChannel = await this._getAnnounceChannel(voiceChannel.guild);
+      if (announceChannel) {
+        await announceChannel.send(
+          `Recording started in \`${voiceChannel.name}\` — Session: \`${folderName}\``
+        );
+      }
     }
 
     await interaction.editReply({
@@ -311,9 +322,11 @@ class Recorder {
    * Stop the current recording, save WAV files, disconnect, and announce.
    *
    * @param {import('discord.js').ChatInputCommandInteraction|import('discord.js').Guild} interactionOrGuild
-   * @param {boolean} [auto=false]  true when auto-stopped due to empty channel
+   * @param {boolean} [auto=false]    true when auto-stopped due to empty channel
+   * @param {boolean} [silent=false]  When true, suppresses the announce-channel message.
+   *   Pass true when called from the session panel to avoid duplicate chat messages.
    */
-  async stop(interactionOrGuild, auto = false) {
+  async stop(interactionOrGuild, auto = false, silent = false) {
     // interactionOrGuild can be a slash command Interaction or a Guild object
     // (when called internally from onVoiceStateUpdate)
     const isInteraction =
@@ -411,9 +424,9 @@ class Recorder {
       this.connection = null;
     }
 
-    // Announce
+    // Announce (skipped when called silently from the session panel)
     const relPath = path.join(outputDir, sessionName || "");
-    if (guild) {
+    if (guild && !silent) {
       const announceChannel = await this._getAnnounceChannel(guild);
       if (announceChannel) {
         const defaultModel = this.config.whisper_model || "base";
@@ -511,7 +524,7 @@ class Recorder {
     const member = newState.member || oldState.member;
     if (!member) return;
 
-    // Mid-session join announcement
+    // Mid-session join — log internally and notify panel if callback is registered
     if (
       newState.channelId === this.recordingChannel?.id &&
       oldState.channelId !== newState.channelId
@@ -519,13 +532,9 @@ class Recorder {
       this.logger.info(
         `${member.user.username} joined mid-session — now recording them.`
       );
-      this._getAnnounceChannel(newState.guild).then((ch) => {
-        if (ch) {
-          ch.send(
-            `Now recording \`${member.user.username}\` who joined mid-session`
-          );
-        }
-      });
+      if (this.onMidSessionJoin) {
+        this.onMidSessionJoin(member.user.username);
+      }
     }
 
     // Auto-stop when all humans leave

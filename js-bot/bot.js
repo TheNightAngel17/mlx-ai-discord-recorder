@@ -20,19 +20,18 @@ const {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
-  ChannelType,
   Client,
   GatewayIntentBits,
   REST,
   Routes,
   SlashCommandBuilder,
-  SlashCommandSubcommandGroupBuilder,
   SlashCommandSubcommandBuilder,
   StringSelectMenuBuilder,
 } = require("discord.js");
 const { Recorder } = require("./recorder");
 const { PostProcessor } = require("./postProcessor");
 const { QueryHandler } = require("./queryHandler");
+const { SessionPanel } = require("./sessionPanel");
 
 // ---------------------------------------------------------------------------
 // Logging helper — matches Python bot format: YYYY-MM-DD HH:MM:SS [LEVEL] module: message
@@ -89,182 +88,44 @@ const commands = [
   new SlashCommandBuilder()
     .setName("mlx-ai")
     .setDescription("MLX AI Discord Recorder commands")
-    .addSubcommandGroup(
-      new SlashCommandSubcommandGroupBuilder()
-        .setName("record")
-        .setDescription("Voice recording commands")
-        .addSubcommand(
-          new SlashCommandSubcommandBuilder()
-            .setName("start")
-            .setDescription("Join a voice channel and start recording")
-            .addChannelOption((opt) =>
-              opt
-                .setName("voice_channel")
-                .setDescription("The voice channel to record")
-                .setRequired(true)
-                .addChannelTypes(
-                  ChannelType.GuildVoice,
-                  ChannelType.GuildStageVoice
-                )
-            )
-            .addStringOption((opt) =>
-              opt
-                .setName("session_name")
-                .setDescription(
-                  'A label for this session, e.g. "Campaign1_Session4"'
-                )
-                .setRequired(true)
-            )
-        )
-        .addSubcommand(
-          new SlashCommandSubcommandBuilder()
-            .setName("stop")
-            .setDescription("Stop the current recording session")
-        )
-        .addSubcommand(
-          new SlashCommandSubcommandBuilder()
-            .setName("status")
-            .setDescription("Show the status of the current recording session")
+    .addSubcommand(
+      new SlashCommandSubcommandBuilder()
+        .setName("session")
+        .setDescription(
+          "Open an interactive control panel to record and post-process a new session"
         )
     )
-    .addSubcommandGroup(
-      new SlashCommandSubcommandGroupBuilder()
-        .setName("post-process")
-        .setDescription("Post-processing commands")
-        .addSubcommand(
-          new SlashCommandSubcommandBuilder()
-            .setName("start")
-            .setDescription("Run post-processing on a recording session")
-            .addStringOption((opt) =>
-              opt
-                .setName("session_name")
-                .setDescription(
-                  "The session folder name (e.g. 20260330_033020_test)"
-                )
-                .setRequired(true)
-            )
-            .addStringOption((opt) =>
-              opt
-                .setName("model")
-                .setDescription("Whisper model size (default: base)")
-                .setRequired(false)
-                .addChoices(
-                  { name: "tiny", value: "tiny" },
-                  { name: "base", value: "base" },
-                  { name: "small", value: "small" },
-                  { name: "medium", value: "medium" },
-                  { name: "large", value: "large" }
-                )
-            )
-            .addStringOption((opt) =>
-              opt
-                .setName("language")
-                .setDescription(
-                  "Language code (e.g. 'en'). Omit for auto-detect."
-                )
-                .setRequired(false)
-            )
+    .addSubcommand(
+      new SlashCommandSubcommandBuilder()
+        .setName("ask")
+        .setDescription("Ask a question about recorded sessions using RAG")
+        .addStringOption((opt) =>
+          opt
+            .setName("question")
+            .setDescription("The question to ask about recorded sessions")
+            .setRequired(true)
         )
-        .addSubcommand(
-          new SlashCommandSubcommandBuilder()
-            .setName("status")
-            .setDescription("Check if post-processing is currently running")
-        )
-    )
-    .addSubcommandGroup(
-      new SlashCommandSubcommandGroupBuilder()
-        .setName("merge-audio")
-        .setDescription("Audio merge commands")
-        .addSubcommand(
-          new SlashCommandSubcommandBuilder()
-            .setName("start")
+        .addStringOption((opt) =>
+          opt
+            .setName("session")
             .setDescription(
-              "Mix per-user WAV recordings into a combined session MP3"
+              "Restrict results to a specific session folder name (optional)"
             )
-            .addStringOption((opt) =>
-              opt
-                .setName("session_name")
-                .setDescription(
-                  "The session folder name (e.g. 20260330_033020_test)"
-                )
-                .setRequired(true)
-            )
+            .setRequired(false)
         )
-        .addSubcommand(
-          new SlashCommandSubcommandBuilder()
-            .setName("status")
-            .setDescription("Check if an audio merge is currently running")
+        .addIntegerOption((opt) =>
+          opt
+            .setName("top_k")
+            .setDescription("Number of transcript chunks to retrieve (default: 5)")
+            .setRequired(false)
+            .setMinValue(1)
+            .setMaxValue(20)
         )
-    )
-    .addSubcommandGroup(
-      new SlashCommandSubcommandGroupBuilder()
-        .setName("vectorize")
-        .setDescription("Vector database commands")
-        .addSubcommand(
-          new SlashCommandSubcommandBuilder()
-            .setName("start")
-            .setDescription(
-              "Chunk, embed, and store a session transcript into ChromaDB"
-            )
-            .addStringOption((opt) =>
-              opt
-                .setName("session_name")
-                .setDescription(
-                  'Session name, or "all" to process every session'
-                )
-                .setRequired(true)
-            )
-            .addBooleanOption((opt) =>
-              opt
-                .setName("force")
-                .setDescription(
-                  "Re-index even if the session has already been vectorized"
-                )
-                .setRequired(false)
-            )
-        )
-        .addSubcommand(
-          new SlashCommandSubcommandBuilder()
-            .setName("status")
-            .setDescription("Check if vectorization is currently running")
-        )
-    )
-    .addSubcommandGroup(
-      new SlashCommandSubcommandGroupBuilder()
-        .setName("query")
-        .setDescription("RAG query commands")
-        .addSubcommand(
-          new SlashCommandSubcommandBuilder()
-            .setName("ask")
-            .setDescription("Ask a question about recorded D&D sessions using RAG")
-            .addStringOption((opt) =>
-              opt
-                .setName("question")
-                .setDescription("The question to ask about recorded sessions")
-                .setRequired(true)
-            )
-            .addStringOption((opt) =>
-              opt
-                .setName("session")
-                .setDescription(
-                  "Restrict results to a specific session folder name (optional)"
-                )
-                .setRequired(false)
-            )
-            .addIntegerOption((opt) =>
-              opt
-                .setName("top_k")
-                .setDescription("Number of transcript chunks to retrieve (default: 5)")
-                .setRequired(false)
-                .setMinValue(1)
-                .setMaxValue(20)
-            )
-            .addBooleanOption((opt) =>
-              opt
-                .setName("show_sources")
-                .setDescription("Include the retrieved source chunks in the reply (default: false)")
-                .setRequired(false)
-            )
+        .addBooleanOption((opt) =>
+          opt
+            .setName("show_sources")
+            .setDescription("Include the retrieved source chunks in the reply (default: false)")
+            .setRequired(false)
         )
     )
     .toJSON(),
@@ -286,6 +147,7 @@ const client = new Client({
 const recorder = new Recorder(config, makeLogger("recorder"));
 const postProcessor = new PostProcessor(config, makeLogger("postProcessor"));
 const queryHandler = new QueryHandler(config, makeLogger("queryHandler"));
+const sessionPanel = new SessionPanel(recorder, postProcessor, config, makeLogger("sessionPanel"));
 
 // ---------------------------------------------------------------------------
 // Register guild commands on startup
@@ -314,50 +176,17 @@ client.on("interactionCreate", async (interaction) => {
   const group = interaction.options.getSubcommandGroup(false);
   const sub = interaction.options.getSubcommand(false);
 
-  if (group === "record") {
-    if (sub === "start") {
-      const voiceChannel = interaction.options.getChannel("voice_channel");
-      const sessionName = interaction.options.getString("session_name");
-      await recorder.start(interaction, voiceChannel, sessionName);
-    } else if (sub === "stop") {
-      await recorder.stop(interaction);
-    } else if (sub === "status") {
-      await recorder.status(interaction);
-    }
-  } else if (group === "post-process") {
-    if (sub === "start") {
-      const sessionName = interaction.options.getString("session_name");
-      const defaultModel = config.whisper_model || "base";
-      const defaultLang = config.whisper_language === "auto" ? null : (config.whisper_language || null);
-      const model = interaction.options.getString("model") || defaultModel;
-      const language = interaction.options.getString("language") || defaultLang;
-      await postProcessor.postProcess(interaction, sessionName, model, language);
-    } else if (sub === "status") {
-      await postProcessor.status(interaction);
-    }
-  } else if (group === "merge-audio") {
-    if (sub === "start") {
-      const sessionName = interaction.options.getString("session_name");
-      await postProcessor.mergeAudio(interaction, sessionName);
-    } else if (sub === "status") {
-      await postProcessor.mergeAudioStatus(interaction);
-    }
-  } else if (group === "vectorize") {
-    if (sub === "start") {
-      const sessionName = interaction.options.getString("session_name");
-      const force = interaction.options.getBoolean("force") ?? false;
-      await postProcessor.vectorize(interaction, sessionName, force);
-    } else if (sub === "status") {
-      await postProcessor.vectorizeStatus(interaction);
-    }
-  } else if (group === "query") {
-    if (sub === "ask") {
-      const question = interaction.options.getString("question");
-      const sessionFilter = interaction.options.getString("session") ?? null;
-      const topK = interaction.options.getInteger("top_k") ?? 5;
-      const showSources = interaction.options.getBoolean("show_sources") ?? false;
-      await queryHandler.query(interaction, question, sessionFilter, topK, showSources);
-    }
+  if (group === null && sub === "session") {
+    await sessionPanel.open(interaction);
+    return;
+  }
+
+  if (group === null && sub === "ask") {
+    const question = interaction.options.getString("question");
+    const sessionFilter = interaction.options.getString("session") ?? null;
+    const topK = interaction.options.getInteger("top_k") ?? 5;
+    const showSources = interaction.options.getBoolean("show_sources") ?? false;
+    await queryHandler.query(interaction, question, sessionFilter, topK, showSources);
   }
 });
 
@@ -365,6 +194,69 @@ client.on("interactionCreate", async (interaction) => {
 // Button + select menu routing for post-processing
 // ---------------------------------------------------------------------------
 client.on("interactionCreate", async (interaction) => {
+  // ── Session panel — channel select ────────────────────────────────────────
+  if (
+    interaction.isChannelSelectMenu() &&
+    interaction.customId.startsWith("panel_channel:")
+  ) {
+    await sessionPanel.handleChannelSelect(interaction);
+    return;
+  }
+
+  // ── Session panel — Edit Session Details button ───────────────────────────
+  if (
+    interaction.isButton() &&
+    interaction.customId.startsWith("panel_set_name:")
+  ) {
+    await sessionPanel.handleSetNameButton(interaction);
+    return;
+  }
+
+  // ── Session panel — Start Recording button ────────────────────────────────
+  if (
+    interaction.isButton() &&
+    interaction.customId.startsWith("panel_record:")
+  ) {
+    await sessionPanel.handleRecordButton(interaction);
+    return;
+  }
+
+  // ── Session panel — Stop Recording button ─────────────────────────────────
+  if (
+    interaction.isButton() &&
+    interaction.customId.startsWith("panel_stop:")
+  ) {
+    await sessionPanel.handleStopButton(interaction);
+    return;
+  }
+
+  // ── Session panel — Post-Process button ───────────────────────────────────
+  if (
+    interaction.isButton() &&
+    interaction.customId.startsWith("panel_post_process:")
+  ) {
+    await sessionPanel.handlePostProcessButton(interaction);
+    return;
+  }
+
+  // ── Session panel — session name modal submit ─────────────────────────────
+  if (
+    interaction.isModalSubmit() &&
+    interaction.customId.startsWith("panel_name:")
+  ) {
+    await sessionPanel.handleNameModal(interaction);
+    return;
+  }
+
+  // ── Session panel — Whisper model select ──────────────────────────────────
+  if (
+    interaction.isStringSelectMenu() &&
+    interaction.customId.startsWith("panel_model:")
+  ) {
+    await sessionPanel.handleModelSelect(interaction);
+    return;
+  }
+
   // ── Model select menu: post_process_model:<sessionName> ──────────────────
   if (interaction.isStringSelectMenu() && interaction.customId.startsWith("post_process_model:")) {
     const sessionName = interaction.customId.slice("post_process_model:".length);
@@ -441,7 +333,6 @@ client.on("interactionCreate", async (interaction) => {
     );
   }
 });
-
 
 client.on("voiceStateUpdate", (oldState, newState) => {
   recorder.onVoiceStateUpdate(oldState, newState);

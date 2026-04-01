@@ -71,6 +71,28 @@ The bot logs to stdout with timestamps. On first startup it registers slash comm
 
 All commands are registered under the `/mlx-ai` root command.
 
+### Session Control Panel
+
+The recommended way to start a new recording session.
+
+| Command | Description |
+|---------|-------------|
+| `/mlx-ai new-session [session_name:<name>]` | Open an interactive control panel with buttons to set the session name, select a voice channel, start/stop recording, and run post-processing |
+
+Providing `session_name` is optional — if supplied, the panel opens with the name pre-filled. Otherwise, click **✏️ Set Session Name** (the blue button) to enter it.
+
+The panel is ephemeral (only visible to you) and contains:
+
+| Control | Description |
+|---------|-------------|
+| Voice channel selector | Drop-down to choose which voice channel to record |
+| **✏️ Set Session Name** | Opens a modal text input for the session name (shown in blue until a name is set) |
+| **⏺ Start Recording** | Joins the selected channel and begins recording (enabled once name + channel are set) |
+| **⏹ Stop Recording** | Stops recording and saves WAV files (shown while recording) |
+| **⚙️ Post-Process** | Runs the full transcription → merge → vectorize pipeline (enabled after recording stops) |
+
+A status log inside the panel shows live progress for each operation.
+
 ### Recording
 
 | Command | Description |
@@ -210,7 +232,8 @@ recordings/
 
 | File | Description |
 |------|-------------|
-| `bot.js` | **Entry point.** Loads config/env, creates the Discord client, registers slash commands as guild commands on startup, and routes all interactions (`/mlx-ai` subcommands, buttons, select menus) to the appropriate handler. |
+| `bot.js` | **Entry point.** Loads config/env, creates the Discord client, registers slash commands as guild commands on startup, and routes all interactions (`/mlx-ai` subcommands, buttons, select menus, and modals) to the appropriate handler. |
 | `recorder.js` | **Voice recording logic.** Manages the voice connection lifecycle: joining channels, subscribing to per-user Opus audio streams, decoding to PCM via prism-media, padding silence for gaps, writing temporary PCM files, and converting to WAV on stop. Handles auto-stop and mid-session join detection. |
 | `postProcessor.js` | **Python script spawner.** Spawns `py-process/process.py`, `merge_audio.py`, and `vectorize.py` as child processes. Tracks running state for each operation independently and reports results back to Discord. |
 | `queryHandler.js` | **RAG query handler.** Spawns `py-query/query.py` with the user's question and options. Parses the structured stdout output and formats it into a clean Discord reply with answer, timings, and optional sources. |
+| `sessionPanel.js` | **Interactive session control panel.** Manages the ephemeral `/mlx-ai new-session` panel: panel state machine (idle → ready → recording → stopped → processing → done), embed builder, and handlers for the channel select menu, session name modal, and record/stop/post-process buttons. |
