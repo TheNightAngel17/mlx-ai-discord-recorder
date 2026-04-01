@@ -252,6 +252,8 @@ pip install -r py-query/requirements.txt
 | `chat_provider` | `ollama` | Chat backend: `ollama`, `openai`, or `anthropic` |
 | `chat_model` | `llama3.2` | Model name for the chosen chat provider |
 | `ollama_base_url` | `http://localhost:11434` | Ollama API base URL |
+| `query_api_host` | `0.0.0.0` | Host the RAG API server (`py-query/app.py`) binds to |
+| `query_api_port` | `8100` | Port the RAG API server listens on |
 
 > ⚠️ **Warning:** Changing `embedding_provider` or `embedding_model` after vectorizing sessions requires re-running `python py-process/vectorize.py --all --force`.
 
@@ -259,11 +261,16 @@ pip install -r py-query/requirements.txt
 
 ## Quick Start
 
-After installation, start the bot:
+After installation, start the RAG API service (required for `/mlx-ai ask` commands), then start the bot:
 
 #### Bash
 
 ```bash
+# Terminal 1 — always-on RAG API service
+cd py-query
+uvicorn app:app --host 0.0.0.0 --port 8100
+
+# Terminal 2 — Discord bot
 cd js-bot
 node bot.js
 ```
@@ -271,6 +278,11 @@ node bot.js
 #### PowerShell
 
 ```powershell
+# Terminal 1 — always-on RAG API service
+cd py-query
+uvicorn app:app --host 0.0.0.0 --port 8100
+
+# Terminal 2 — Discord bot
 cd js-bot
 node bot.js
 ```
@@ -373,7 +385,8 @@ mlx-ai-discord-recorder/
 │   └── README.md             # Processing pipeline documentation
 │
 └── py-query/                 # RAG query service (Python)
-    ├── query.py              # CLI entry point for RAG queries
+    ├── app.py                # FastAPI always-on API server (POST /api/query, GET /api/sessions, GET /api/health)
+    ├── query.py              # CLI entry point for one-off RAG queries
     ├── rag.py                # Core RAG logic (embed → retrieve → generate)
     ├── providers.py          # LLM provider abstraction (Ollama, OpenAI, Anthropic)
     ├── requirements.txt      # Python dependencies
