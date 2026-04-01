@@ -137,7 +137,7 @@ Ask a natural-language question about recorded and vectorized sessions. Spawns `
 - **Mid-session joins** — Users who join after recording starts are detected and recorded; their username appears in the panel log and an announcement is sent to the configured text channel
 - **Silence padding** — Per-user WAV files include silence for gaps when the user isn't speaking, keeping all files time-aligned
 - **Session panel** — The `/mlx-ai session` panel guides the user through the entire session lifecycle. When post-processing completes, a public summary embed is posted to the channel.
-- **Python spawning** — All Python scripts are spawned from the repo root, using the `.venv` Python if present, falling back to system `python`
+- **Python spawning** — Post-processing scripts (`process.py`, `merge_audio.py`, `vectorize.py`) are spawned from the repo root via `child_process.spawn()`, using the `.venv` Python if present, falling back to system `python`. RAG queries are sent to the always-on `py-query/app.py` HTTP API instead of spawning a script
 - **Concurrency guards** — Only one recording and one post-processing job can run at a time; the panel disables its buttons accordingly
 
 ---
@@ -196,5 +196,5 @@ recordings/
 | `bot.js` | **Entry point.** Loads config/env, creates the Discord client, registers slash commands as guild commands on startup, and routes all interactions (`/mlx-ai` subcommands, buttons, select menus, and modals) to the appropriate handler. |
 | `recorder.js` | **Voice recording logic.** Manages the voice connection lifecycle: joining channels, subscribing to per-user Opus audio streams, decoding to PCM via prism-media, padding silence for gaps, writing temporary PCM files, and converting to WAV on stop. Handles auto-stop and mid-session join detection. |
 | `postProcessor.js` | **Python script spawner.** Spawns `py-process/process.py`, `merge_audio.py`, and `vectorize.py` as child processes. Tracks running state for each operation independently and reports results back to Discord. |
-| `queryHandler.js` | **RAG query handler.** Spawns `py-query/query.py` with the user's question and options. Parses the structured stdout output and formats it into a clean Discord reply with answer, timings, and optional sources. |
+| `queryHandler.js` | **RAG query handler.** Calls the `py-query/app.py` HTTP API via `fetch()`. Formats the JSON response into a Discord reply with the answer, timings, and optional source citations. |
 | `sessionPanel.js` | **Interactive session control panel.** Manages the ephemeral `/mlx-ai session` panel: panel state machine (idle → ready → recording → stopping → stopped → processing → done), embed builder, and handlers for the channel select menu, session name modal, Whisper model selector, and record/stop/post-process buttons. Posts a public completion embed when post-processing finishes. |

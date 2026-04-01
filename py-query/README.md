@@ -124,7 +124,7 @@ uvicorn app:app --host 0.0.0.0 --port 8100
 
 The server loads config, initialises providers, and opens ChromaDB once at startup. After that, each query is handled in-process with no cold-start cost.
 
-> 💡 Keep this terminal open (or run the process in the background / as a system service) while the Discord bot is running so that `/mlx-ai query ask` commands are always available.
+> 💡 Keep this terminal open (or run the process in the background / as a system service) while the Discord bot is running so that `/mlx-ai ask` commands are always available.
 
 ---
 
@@ -343,7 +343,7 @@ SOURCES (5 chunks retrieved)
 
 | File | Description |
 |------|-------------|
-| `query.py` | **CLI entry point.** Loads `.env` and `config.yaml`, parses CLI arguments, calls `query_rag()`, and prints formatted results (answer, timings, optional sources). Also the script spawned by the JS bot for Discord `/mlx-ai ask` commands. |
+| `query.py` | **CLI entry point.** Loads `.env` and `config.yaml`, parses CLI arguments, calls `query_rag()`, and prints formatted results (answer, timings, optional sources). Available for standalone CLI use; the Discord bot queries via the `app.py` HTTP API rather than spawning this script. |
 | `rag.py` | **Core RAG logic.** The `query_rag()` function orchestrates the full pipeline: embed the question → query ChromaDB for top-k chunks → build a grounded system prompt → call the chat provider → return `{answer, sources, timings}`. |
 | `providers.py` | **LLM provider abstraction.** Defines `EmbeddingProvider` and `ChatProvider` abstract base classes with concrete implementations for Ollama, OpenAI, and Anthropic. Factory functions `get_embedding_provider()` and `get_chat_provider()` instantiate the correct provider based on `config.yaml`. Uses raw HTTP requests — no vendor SDKs. |
 

@@ -261,7 +261,7 @@ pip install -r py-query/requirements.txt
 
 ## Quick Start
 
-After installation, start the RAG API service (required for `/mlx-ai query ask` commands), then start the bot:
+After installation, start the RAG API service (required for `/mlx-ai ask` commands), then start the bot:
 
 #### Bash
 
