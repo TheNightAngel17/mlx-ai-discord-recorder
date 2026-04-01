@@ -163,6 +163,13 @@ class Recorder {
 
     // userId -> { username, opusStream, decoder, fileStream, pcmPath }
     this.audioBuffers = new Map();
+
+    /**
+     * Optional callback invoked when a user joins mid-session.
+     * Set by SessionPanel to surface the event in the panel log.
+     * @type {((username: string) => void) | null}
+     */
+    this.onMidSessionJoin = null;
   }
 
   // -------------------------------------------------------------------------
@@ -517,7 +524,7 @@ class Recorder {
     const member = newState.member || oldState.member;
     if (!member) return;
 
-    // Mid-session join — log internally only (no announce-channel message)
+    // Mid-session join — log internally and notify panel if callback is registered
     if (
       newState.channelId === this.recordingChannel?.id &&
       oldState.channelId !== newState.channelId
@@ -525,6 +532,9 @@ class Recorder {
       this.logger.info(
         `${member.user.username} joined mid-session — now recording them.`
       );
+      if (this.onMidSessionJoin) {
+        this.onMidSessionJoin(member.user.username);
+      }
     }
 
     // Auto-stop when all humans leave

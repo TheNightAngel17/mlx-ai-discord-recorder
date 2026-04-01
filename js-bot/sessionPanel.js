@@ -100,7 +100,7 @@ class SessionPanel {
    * @param {string} message  Message to append
    */
   _log(state, message) {
-    const safe = message.replace(/```/g, "").trim().slice(0, 160);
+    const safe = `▸ ${message.replace(/```/g, "").trim()}`.slice(0, 160);
     state.log.push(safe);
     if (state.log.length > 8) {
       state.log.shift();
@@ -273,9 +273,10 @@ class SessionPanel {
     const self = this;
 
     const capture = async (content, isError) => {
-      // Strip markdown noise and grab the first line for the log
+      // Strip markdown noise, leading ✅ emoji, and grab the first line for the log
       const line = content
         .split("\n")[0]
+        .replace(/^✅\s*/, "")
         .replace(/[`*]/g, "")
         .trim()
         .slice(0, 150);
@@ -502,6 +503,14 @@ class SessionPanel {
           state,
           `Session folder: \`${state.sessionFolderName}\``
         );
+
+        // Register a callback so mid-session voice joins appear in the panel log.
+        this.recorder.onMidSessionJoin = (username) => {
+          this._log(state, `\`${username}\` joined the channel.`);
+          this._refreshPanel(interaction, panelId, state).catch((err) => {
+            this.logger.warn(`Failed to refresh panel after mid-session join: ${err.message}`);
+          });
+        };
       } else {
         // recorder.start() completed but isRecording is false → something failed
         if (state.status === STATUS.RECORDING) {
@@ -542,6 +551,8 @@ class SessionPanel {
       // Pass the guild (not the interaction) so recorder handles its own
       // announce-channel message; the panel reflects the final result below.
       await this.recorder.stop(interaction.guild, false, true);
+      // Clear the mid-session join callback — recording is over.
+      this.recorder.onMidSessionJoin = null;
       state.status = STATUS.STOPPED;
       this._log(state, `Files saved to \`${state.sessionFolderName}\`.`);
     } catch (err) {
@@ -614,6 +625,19 @@ class SessionPanel {
         defaultLang,
         true
       );
+
+      // If post-processing completed successfully, post a public (non-ephemeral)
+      // completion notice so the whole channel can see the session is ready.
+      if (state.status === STATUS.DONE) {
+        try {
+          await interaction.followUp({
+            content: `✅ Post-processing complete for session \`${state.sessionFolderName}\``,
+            ephemeral: false,
+          });
+        } catch (followUpErr) {
+          this.logger.warn(`Failed to post public completion notice: ${followUpErr.message}`);
+        }
+      }
     } catch (err) {
       this.logger.error(`Session panel postProcess failed: ${err.message}`);
       state.status = STATUS.STOPPED;
