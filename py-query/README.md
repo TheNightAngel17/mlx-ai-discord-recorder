@@ -265,8 +265,8 @@ python query.py "Describe the final boss fight" --top-k 10 --show-sources
 ### Discord Usage
 
 ```
-/mlx-ai query ask question:What happened when the party entered the cave?
-/mlx-ai query ask question:Who attacked the dragon? session:20260330_143000_test top_k:10 show_sources:true
+/mlx-ai ask question:What happened when the party entered the cave?
+/mlx-ai ask question:Who attacked the dragon? session:20260330_143000_test top_k:10 show_sources:true
 ```
 
 > ⚠️ The `py-query/app.py` API server must be running for Discord queries to work. See [Running the API Server](#running-the-api-server).
@@ -343,9 +343,8 @@ SOURCES (5 chunks retrieved)
 
 | File | Description |
 |------|-------------|
-| `app.py` | **FastAPI API server.** Always-on HTTP service with `POST /api/query`, `GET /api/sessions`, and `GET /api/health` endpoints. Loads config, initialises providers, and opens ChromaDB once at startup — eliminating per-query cold-start overhead. Start with `uvicorn app:app --host 0.0.0.0 --port 8100`. |
-| `query.py` | **CLI entry point.** Loads `.env` and `config.yaml`, parses CLI arguments, calls `query_rag()`, and prints formatted results (answer, timings, optional sources). Useful for one-off queries without running the API server. |
-| `rag.py` | **Core RAG logic.** The `query_rag()` function orchestrates the full pipeline: embed the question → query ChromaDB for top-k chunks → build a grounded system prompt → call the chat provider → return `{answer, sources, timings}`. Accepts optional pre-initialised provider and ChromaDB client objects for the API's zero-cold-start path. |
+| `query.py` | **CLI entry point.** Loads `.env` and `config.yaml`, parses CLI arguments, calls `query_rag()`, and prints formatted results (answer, timings, optional sources). Also the script spawned by the JS bot for Discord `/mlx-ai ask` commands. |
+| `rag.py` | **Core RAG logic.** The `query_rag()` function orchestrates the full pipeline: embed the question → query ChromaDB for top-k chunks → build a grounded system prompt → call the chat provider → return `{answer, sources, timings}`. |
 | `providers.py` | **LLM provider abstraction.** Defines `EmbeddingProvider` and `ChatProvider` abstract base classes with concrete implementations for Ollama, OpenAI, and Anthropic. Factory functions `get_embedding_provider()` and `get_chat_provider()` instantiate the correct provider based on `config.yaml`. Uses raw HTTP requests — no vendor SDKs. |
 
 ---

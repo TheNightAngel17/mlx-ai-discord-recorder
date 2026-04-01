@@ -16,8 +16,6 @@ Every code change must include the corresponding documentation updates listed in
 | New `.env` variable | `.env.example` (placeholder only), root `README.md` (Configuration table), relevant sub-project README |
 | New npm or pip dependency | `package.json` / `requirements.txt`, relevant sub-project README (Dependencies table) |
 | New file added to the project | Root `README.md` (Project Structure tree), relevant sub-project README (File Descriptions table) |
-| Bug fix or behaviour change | `CHANGELOG.md` under `[Unreleased]` |
-| Any user-visible change | `CHANGELOG.md` under `[Unreleased]` |
 
 ## Configuration & Secrets Rules
 
@@ -38,7 +36,7 @@ Every code change must include the corresponding documentation updates listed in
 - Use **GitHub-Flavored Markdown** (GFM).
 - Provide **both Bash and PowerShell** command examples in the root README.
 - Use tables for structured data (dependencies, config fields, command parameters).
-- Wrap inline file/command references in backticks: `config.yaml`, `transcribe.py`, `/mlx-ai record start`.
+- Wrap inline file/command references in backticks: `config.yaml`, `transcribe.py`, `/mlx-ai session`.
 - Use relative links between READMEs: `../README.md`, `./py-process/README.md`.
 - Every sub-project README must include navigation links back to root and to sibling sub-projects.
 
@@ -47,6 +45,5 @@ Every code change must include the corresponding documentation updates listed in
 Detailed formatting rules and update procedures live in:
 
 - **`.github/prompts/updateReadme.prompt.md`** — Standardized README structure, cross-linking rules, formatting conventions
-- **`.github/prompts/updateChangelog.prompt.md`** — Keep a Changelog v1.1.0 format with custom hash/HR structure
 
-Always reference these prompts when updating `README.md` or `CHANGELOG.md`. They are the source of truth for formatting.
+Always reference `.github/prompts/updateReadme.prompt.md` (the update README prompt) when updating `README.md` files; it is the source of truth for formatting.

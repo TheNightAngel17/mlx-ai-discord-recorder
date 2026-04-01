@@ -120,7 +120,7 @@ python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}'); print(f'GP
 
 ### `process.py` — Full Pipeline Orchestrator
 
-Runs all three processing steps in order for a single session. This is the script the JS bot calls when you use `/mlx-ai post-process start`.
+Runs all three processing steps in order for a single session. This is the script the JS bot calls when you press **⚙️ Post-Process** in the `/mlx-ai session` control panel.
 
 If any step fails, the pipeline halts immediately.
 
@@ -146,7 +146,7 @@ python process.py 20260330_143000_Campaign1_Session4 --model medium --language e
 #### Discord Example
 
 ```
-/mlx-ai post-process start session_name:20260330_143000_Campaign1_Session4 model:medium language:en
+# Triggered automatically via the ⚙️ Post-Process button in /mlx-ai session
 ```
 
 | Argument | Required | Default | Description |
@@ -219,7 +219,7 @@ python merge_audio.py 20260330_143000_Campaign1_Session4
 #### Discord Example
 
 ```
-/mlx-ai merge-audio start session_name:20260330_143000_Campaign1_Session4
+# Triggered automatically as part of ⚙️ Post-Process in /mlx-ai session
 ```
 
 | Argument | Required | Description |
@@ -273,8 +273,7 @@ python vectorize.py 20260330_143000_Campaign1_Session4 --force
 #### Discord Example
 
 ```
-/mlx-ai vectorize start session_name:20260330_143000_Campaign1_Session4 force:true
-/mlx-ai vectorize start session_name:all
+# Triggered automatically as part of ⚙️ Post-Process in /mlx-ai session
 ```
 
 | Argument | Required | Description |

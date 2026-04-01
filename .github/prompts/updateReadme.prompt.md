@@ -98,4 +98,3 @@ When updating READMEs after code changes:
 3. **Update the root README** first (it's the source of truth for project-wide info)
 4. **Update affected sub-project READMEs** for detailed changes
 5. **Verify cross-links** still point to valid section anchors
-6. **Update the CHANGELOG** — see `.github/prompts/updateChangelog.prompt.md`

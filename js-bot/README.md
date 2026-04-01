@@ -69,107 +69,64 @@ The bot logs to stdout with timestamps. On first startup it registers slash comm
 
 ## Slash Command Reference
 
-All commands are registered under the `/mlx-ai` root command.
+All commands are registered under the `/mlx-ai` root command. There are two top-level subcommands.
 
-### Session Control Panel
+---
 
-The recommended way to start a new recording session.
+### `/mlx-ai session` — Interactive Session Control Panel
 
-| Command | Description |
-|---------|-------------|
-| `/mlx-ai new-session [session_name:<name>]` | Open an interactive control panel with buttons to set the session name, select a voice channel, start/stop recording, and run post-processing |
+Opens an ephemeral (only visible to you) control panel that walks you through the full session lifecycle: name → channel → record → post-process.
 
-Providing `session_name` is optional — if supplied, the panel opens with the name pre-filled. Otherwise, click **✏️ Set Session Name** (the blue button) to enter it.
+**Discord example:**
+```
+/mlx-ai session
+```
 
-The panel is ephemeral (only visible to you) and contains:
+The panel progresses through the following states:
+
+| State | Description |
+|-------|-------------|
+| ⚪ **Idle** | Panel just opened — set a session name and select a voice channel to continue |
+| 🟡 **Ready** | Both name and channel are set — press **⏺ Start Recording** to begin |
+| 🔴 **Recording** | Actively recording — press **⏹ Stop Recording** when done |
+| 🟠 **Stopping** | Stop requested — WAV files are being saved |
+| 🟢 **Stopped** | Recording saved — choose a Whisper model and press **⚙️ Post-Process** |
+| ⏳ **Processing** | Post-processing pipeline running (transcribe → merge → vectorize) |
+| ✅ **Done** | Post-processing complete — a public summary embed is posted to the channel |
+
+#### Panel Controls
 
 | Control | Description |
 |---------|-------------|
-| Voice channel selector | Drop-down to choose which voice channel to record |
-| **✏️ Set Session Name** | Opens a modal text input for the session name (shown in blue until a name is set) |
+| Voice channel selector | Drop-down to choose which voice channel to record (shown in Idle and Ready states) |
+| **✏️ Edit Session Details** | Opens a modal text input for the session name. Shown in green until a name is set. |
 | **⏺ Start Recording** | Joins the selected channel and begins recording (enabled once name + channel are set) |
 | **⏹ Stop Recording** | Stops recording and saves WAV files (shown while recording) |
+| Whisper model selector | Drop-down to choose the Whisper model size for transcription (shown after recording stops) |
 | **⚙️ Post-Process** | Runs the full transcription → merge → vectorize pipeline (enabled after recording stops) |
 
-A status log inside the panel shows live progress for each operation.
+A **Log** field inside the embed shows live progress for each operation.
 
-### Recording
+> **Note:** The panel is stateful and lives in memory for the lifetime of the bot process. If the bot restarts, open a new panel with `/mlx-ai session`.
 
-| Command | Description |
-|---------|-------------|
-| `/mlx-ai record start voice_channel:<channel> session_name:<name>` | Join the voice channel and start recording each user to a separate WAV file |
-| `/mlx-ai record stop` | Stop the active recording, save WAV files, disconnect, and announce |
-| `/mlx-ai record status` | Show session name, voice channel, elapsed duration, and number of users being recorded |
+---
 
-**Discord example:**
+### `/mlx-ai ask` — RAG Query
+
+Ask a natural-language question about recorded and vectorized sessions. Spawns `py-query/query.py` and returns the answer directly in Discord.
+
+**Discord examples:**
 ```
-/mlx-ai record start voice_channel:#DnD-Voice session_name:Campaign1_Session4
-```
-
-### Post-Processing (Full Pipeline)
-
-Triggers `py-process/process.py` which runs: transcribe → merge audio → vectorize.
-
-| Command | Description |
-|---------|-------------|
-| `/mlx-ai post-process start session_name:<name> [model:<size>] [language:<code>]` | Run the full processing pipeline on a recorded session |
-| `/mlx-ai post-process status` | Check if post-processing is currently running |
-
-**Discord example:**
-```
-/mlx-ai post-process start session_name:20260330_143000_Campaign1_Session4 model:medium language:en
+/mlx-ai ask question:What happened when the party entered the cave?
+/mlx-ai ask question:Who attacked the dragon? session:20260330_143000_Campaign1_Session4 top_k:10 show_sources:true
 ```
 
 | Parameter | Required | Default | Description |
 |-----------|----------|---------|-------------|
-| `session_name` | ✅ | — | Session folder name (e.g. `20260330_143000_Campaign1_Session4`) |
-| `model` | ❌ | From `config.yaml` | Whisper model: `tiny`, `base`, `small`, `medium`, `large` |
-| `language` | ❌ | From `config.yaml` | Language code (e.g. `en`). Omit for auto-detect. |
-
-### Audio Merge
-
-Triggers `py-process/merge_audio.py` to mix per-user WAVs into a single combined recording.
-
-| Command | Description |
-|---------|-------------|
-| `/mlx-ai merge-audio start session_name:<name>` | Mix all per-user WAV files into `_session_mix.wav` + `_session_mix.mp3` |
-| `/mlx-ai merge-audio status` | Check if an audio merge is currently running |
-
-**Discord example:**
-```
-/mlx-ai merge-audio start session_name:20260330_143000_Campaign1_Session4
-```
-
-### Vectorize
-
-Triggers `py-process/vectorize.py` to chunk, embed, and store transcripts in ChromaDB.
-
-| Command | Description |
-|---------|-------------|
-| `/mlx-ai vectorize start session_name:<name\|"all"> [force:<true\|false>]` | Chunk and embed a session's transcript into ChromaDB |
-| `/mlx-ai vectorize status` | Check if vectorization is currently running |
-
-**Discord example:**
-```
-/mlx-ai vectorize start session_name:all force:true
-```
-
-### RAG Query
-
-Sends a query to the always-on `py-query/app.py` FastAPI service and returns the LLM answer. **The API must be running before this command works.** Start it with:
-
-```bash
-cd py-query && uvicorn app:app --host 0.0.0.0 --port 8100
-```
-
-| Command | Description |
-|---------|-------------|
-| `/mlx-ai query ask question:<text> [session:<name>] [top_k:<n>] [show_sources:<bool>]` | Ask a question about recorded D&D sessions using RAG |
-
-**Discord example:**
-```
-/mlx-ai query ask question:What happened when the party entered the cave? session:20260330_143000_test top_k:5 show_sources:true
-```
+| `question` | ✅ | — | The question to ask about recorded sessions |
+| `session` | ❌ | All sessions | Restrict search to a specific session folder name |
+| `top_k` | ❌ | `5` | Number of transcript chunks to retrieve (1–20) |
+| `show_sources` | ❌ | `false` | Include the retrieved source chunks in the reply |
 
 ---
 
@@ -177,11 +134,11 @@ cd py-query && uvicorn app:app --host 0.0.0.0 --port 8100
 
 - **Per-user audio files** — Each user's audio is saved to `<output_directory>/<YYYYMMDD_HHMMSS>_<session_name>/<username>.wav`
 - **Auto-stop** — When the last human leaves the voice channel, the recording stops automatically
-- **Mid-session joins** — Users who join after recording starts are detected and recorded; an announcement is sent to the configured text channel
+- **Mid-session joins** — Users who join after recording starts are detected and recorded; their username appears in the panel log and an announcement is sent to the configured text channel
 - **Silence padding** — Per-user WAV files include silence for gaps when the user isn't speaking, keeping all files time-aligned
-- **Post-process button** — When a recording stops, the bot posts a message with a model selector and a "Start Processing" button for one-click post-processing
-- **Python spawning** — All Python scripts are spawned from the repo root, using the `.venv` Python if present, falling back to system `python`. The exception is RAG queries, which call the always-on `py-query/app.py` HTTP API via `fetch()` instead of spawning a subprocess.
-- **Concurrency guards** — Only one recording, one post-processing job, one merge, and one vectorize job can run at a time
+- **Session panel** — The `/mlx-ai session` panel guides the user through the entire session lifecycle. When post-processing completes, a public summary embed is posted to the channel.
+- **Python spawning** — All Python scripts are spawned from the repo root, using the `.venv` Python if present, falling back to system `python`
+- **Concurrency guards** — Only one recording and one post-processing job can run at a time; the panel disables its buttons accordingly
 
 ---
 
@@ -239,5 +196,5 @@ recordings/
 | `bot.js` | **Entry point.** Loads config/env, creates the Discord client, registers slash commands as guild commands on startup, and routes all interactions (`/mlx-ai` subcommands, buttons, select menus, and modals) to the appropriate handler. |
 | `recorder.js` | **Voice recording logic.** Manages the voice connection lifecycle: joining channels, subscribing to per-user Opus audio streams, decoding to PCM via prism-media, padding silence for gaps, writing temporary PCM files, and converting to WAV on stop. Handles auto-stop and mid-session join detection. |
 | `postProcessor.js` | **Python script spawner.** Spawns `py-process/process.py`, `merge_audio.py`, and `vectorize.py` as child processes. Tracks running state for each operation independently and reports results back to Discord. |
-| `queryHandler.js` | **RAG query handler.** Calls the `py-query/app.py` FastAPI service via `fetch()` with the user's question and options. Formats the JSON response (answer, timings, optional sources) into a clean Discord reply. Handles API-down and timeout errors gracefully. |
-| `sessionPanel.js` | **Interactive session control panel.** Manages the ephemeral `/mlx-ai new-session` panel: panel state machine (idle → ready → recording → stopped → processing → done), embed builder, and handlers for the channel select menu, session name modal, and record/stop/post-process buttons. |
+| `queryHandler.js` | **RAG query handler.** Spawns `py-query/query.py` with the user's question and options. Parses the structured stdout output and formats it into a clean Discord reply with answer, timings, and optional sources. |
+| `sessionPanel.js` | **Interactive session control panel.** Manages the ephemeral `/mlx-ai session` panel: panel state machine (idle → ready → recording → stopping → stopped → processing → done), embed builder, and handlers for the channel select menu, session name modal, Whisper model selector, and record/stop/post-process buttons. Posts a public completion embed when post-processing finishes. |
