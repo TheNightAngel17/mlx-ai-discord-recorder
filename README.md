@@ -277,11 +277,8 @@ node bot.js
 
 Then use Discord slash commands:
 
-1. `/mlx-ai new-session` — Open an interactive control panel to set the session name, choose a voice channel, start/stop recording, and run post-processing all from one place
-2. `/mlx-ai record start voice_channel:#DnD-Voice session_name:Campaign1_Session4` — Start recording (traditional command)
-3. `/mlx-ai record stop` — Stop recording (or just leave the channel — it auto-stops)
-4. `/mlx-ai post-process start session_name:20260330_143000_Campaign1_Session4` — Transcribe + merge + vectorize
-5. `/mlx-ai query ask question:What happened when the party entered the cave?` — Ask questions about recorded sessions
+1. `/mlx-ai session` — Open the interactive session control panel: set a name, select a voice channel, start/stop recording, choose a Whisper model, and run post-processing — all from one place
+2. `/mlx-ai ask question:What happened when the party entered the cave?` — Ask a natural-language question about any recorded session
 
 ---
 
@@ -333,11 +330,11 @@ Record ──► Transcribe ──► Merge Audio ──► Vectorize ──► 
 
 | Step | Trigger | Tool |
 |------|---------|------|
-| **Record** | `/mlx-ai record start` | `js-bot/recorder.js` |
-| **Transcribe** | `/mlx-ai post-process start` or `python py-process/transcribe.py` | OpenAI Whisper |
-| **Merge Audio** | `/mlx-ai merge-audio start` or `python py-process/merge_audio.py` | pydub + ffmpeg |
-| **Vectorize** | `/mlx-ai vectorize start` or `python py-process/vectorize.py` | ChromaDB + Ollama/OpenAI |
-| **Query** | `/mlx-ai query ask` or `python py-query/query.py` | RAG (embed → retrieve → chat) |
+| **Record** | `/mlx-ai session` → ⏺ Start Recording | `js-bot/recorder.js` |
+| **Transcribe** | `/mlx-ai session` → ⚙️ Post-Process or `python py-process/transcribe.py` | OpenAI Whisper |
+| **Merge Audio** | `/mlx-ai session` → ⚙️ Post-Process or `python py-process/merge_audio.py` | pydub + ffmpeg |
+| **Vectorize** | `/mlx-ai session` → ⚙️ Post-Process or `python py-process/vectorize.py` | ChromaDB + Ollama/OpenAI |
+| **Query** | `/mlx-ai ask` or `python py-query/query.py` | RAG (embed → retrieve → chat) |
 
 The **post-process** command runs steps 2–4 automatically in sequence. Each step can also be run individually.
 
@@ -362,7 +359,7 @@ mlx-ai-discord-recorder/
 │   ├── recorder.js           # Voice recording logic (DAVE/E2EE support)
 │   ├── postProcessor.js      # Spawns Python scripts for processing pipeline
 │   ├── queryHandler.js       # Spawns py-query for RAG queries
-│   ├── sessionPanel.js       # Interactive /mlx-ai new-session control panel
+│   ├── sessionPanel.js       # Interactive /mlx-ai session control panel
 │   ├── package.json          # Node.js dependencies
 │   └── README.md             # JS bot documentation
 │

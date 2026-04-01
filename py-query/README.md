@@ -124,8 +124,8 @@ python query.py "Describe the final boss fight" --top-k 10 --show-sources
 ### Discord Usage
 
 ```
-/mlx-ai query ask question:What happened when the party entered the cave?
-/mlx-ai query ask question:Who attacked the dragon? session:20260330_143000_test top_k:10 show_sources:true
+/mlx-ai ask question:What happened when the party entered the cave?
+/mlx-ai ask question:Who attacked the dragon? session:20260330_143000_test top_k:10 show_sources:true
 ```
 
 | Parameter | Required | Default | Description |
@@ -200,7 +200,7 @@ SOURCES (5 chunks retrieved)
 
 | File | Description |
 |------|-------------|
-| `query.py` | **CLI entry point.** Loads `.env` and `config.yaml`, parses CLI arguments, calls `query_rag()`, and prints formatted results (answer, timings, optional sources). Also the script spawned by the JS bot for Discord `/mlx-ai query ask` commands. |
+| `query.py` | **CLI entry point.** Loads `.env` and `config.yaml`, parses CLI arguments, calls `query_rag()`, and prints formatted results (answer, timings, optional sources). Also the script spawned by the JS bot for Discord `/mlx-ai ask` commands. |
 | `rag.py` | **Core RAG logic.** The `query_rag()` function orchestrates the full pipeline: embed the question → query ChromaDB for top-k chunks → build a grounded system prompt → call the chat provider → return `{answer, sources, timings}`. |
 | `providers.py` | **LLM provider abstraction.** Defines `EmbeddingProvider` and `ChatProvider` abstract base classes with concrete implementations for Ollama, OpenAI, and Anthropic. Factory functions `get_embedding_provider()` and `get_chat_provider()` instantiate the correct provider based on `config.yaml`. Uses raw HTTP requests — no vendor SDKs. |
 
