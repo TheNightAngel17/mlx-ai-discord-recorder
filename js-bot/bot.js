@@ -25,7 +25,6 @@ const {
   REST,
   Routes,
   SlashCommandBuilder,
-  SlashCommandSubcommandGroupBuilder,
   SlashCommandSubcommandBuilder,
   StringSelectMenuBuilder,
 } = require("discord.js");
@@ -91,113 +90,42 @@ const commands = [
     .setDescription("MLX AI Discord Recorder commands")
     .addSubcommand(
       new SlashCommandSubcommandBuilder()
-        .setName("new-session")
+        .setName("session")
         .setDescription(
           "Open an interactive control panel to record and post-process a new session"
         )
+    )
+    .addSubcommand(
+      new SlashCommandSubcommandBuilder()
+        .setName("ask")
+        .setDescription("Ask a question about recorded sessions using RAG")
         .addStringOption((opt) =>
           opt
-            .setName("session_name")
+            .setName("question")
+            .setDescription("The question to ask about recorded sessions")
+            .setRequired(true)
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName("session")
             .setDescription(
-              'A label for this session, e.g. "Campaign1_Session4"'
+              "Restrict results to a specific session folder name (optional)"
             )
             .setRequired(false)
         )
-    )
-    .addSubcommandGroup(
-      new SlashCommandSubcommandGroupBuilder()
-        .setName("merge-audio")
-        .setDescription("Audio merge commands")
-        .addSubcommand(
-          new SlashCommandSubcommandBuilder()
-            .setName("start")
-            .setDescription(
-              "Mix per-user WAV recordings into a combined session MP3"
-            )
-            .addStringOption((opt) =>
-              opt
-                .setName("session_name")
-                .setDescription(
-                  "The session folder name (e.g. 20260330_033020_test)"
-                )
-                .setRequired(true)
-            )
+        .addIntegerOption((opt) =>
+          opt
+            .setName("top_k")
+            .setDescription("Number of transcript chunks to retrieve (default: 5)")
+            .setRequired(false)
+            .setMinValue(1)
+            .setMaxValue(20)
         )
-        .addSubcommand(
-          new SlashCommandSubcommandBuilder()
-            .setName("status")
-            .setDescription("Check if an audio merge is currently running")
-        )
-    )
-    .addSubcommandGroup(
-      new SlashCommandSubcommandGroupBuilder()
-        .setName("vectorize")
-        .setDescription("Vector database commands")
-        .addSubcommand(
-          new SlashCommandSubcommandBuilder()
-            .setName("start")
-            .setDescription(
-              "Chunk, embed, and store a session transcript into ChromaDB"
-            )
-            .addStringOption((opt) =>
-              opt
-                .setName("session_name")
-                .setDescription(
-                  'Session name, or "all" to process every session'
-                )
-                .setRequired(true)
-            )
-            .addBooleanOption((opt) =>
-              opt
-                .setName("force")
-                .setDescription(
-                  "Re-index even if the session has already been vectorized"
-                )
-                .setRequired(false)
-            )
-        )
-        .addSubcommand(
-          new SlashCommandSubcommandBuilder()
-            .setName("status")
-            .setDescription("Check if vectorization is currently running")
-        )
-    )
-    .addSubcommandGroup(
-      new SlashCommandSubcommandGroupBuilder()
-        .setName("query")
-        .setDescription("RAG query commands")
-        .addSubcommand(
-          new SlashCommandSubcommandBuilder()
-            .setName("ask")
-            .setDescription("Ask a question about recorded D&D sessions using RAG")
-            .addStringOption((opt) =>
-              opt
-                .setName("question")
-                .setDescription("The question to ask about recorded sessions")
-                .setRequired(true)
-            )
-            .addStringOption((opt) =>
-              opt
-                .setName("session")
-                .setDescription(
-                  "Restrict results to a specific session folder name (optional)"
-                )
-                .setRequired(false)
-            )
-            .addIntegerOption((opt) =>
-              opt
-                .setName("top_k")
-                .setDescription("Number of transcript chunks to retrieve (default: 5)")
-                .setRequired(false)
-                .setMinValue(1)
-                .setMaxValue(20)
-            )
-            .addBooleanOption((opt) =>
-              opt
-                .setName("show_sources")
-                .setDescription("Include the retrieved source chunks in the reply (default: false)")
-                .setRequired(false)
-            )
+        .addBooleanOption((opt) =>
+          opt
+            .setName("show_sources")
+            .setDescription("Include the retrieved source chunks in the reply (default: false)")
+            .setRequired(false)
         )
     )
     .toJSON(),
@@ -248,35 +176,17 @@ client.on("interactionCreate", async (interaction) => {
   const group = interaction.options.getSubcommandGroup(false);
   const sub = interaction.options.getSubcommand(false);
 
-  if (group === null && sub === "new-session") {
-    const sessionName = interaction.options.getString("session_name") ?? null;
-    await sessionPanel.open(interaction, sessionName);
+  if (group === null && sub === "session") {
+    await sessionPanel.open(interaction);
     return;
   }
 
-  if (group === "merge-audio") {
-    if (sub === "start") {
-      const sessionName = interaction.options.getString("session_name");
-      await postProcessor.mergeAudio(interaction, sessionName);
-    } else if (sub === "status") {
-      await postProcessor.mergeAudioStatus(interaction);
-    }
-  } else if (group === "vectorize") {
-    if (sub === "start") {
-      const sessionName = interaction.options.getString("session_name");
-      const force = interaction.options.getBoolean("force") ?? false;
-      await postProcessor.vectorize(interaction, sessionName, force);
-    } else if (sub === "status") {
-      await postProcessor.vectorizeStatus(interaction);
-    }
-  } else if (group === "query") {
-    if (sub === "ask") {
-      const question = interaction.options.getString("question");
-      const sessionFilter = interaction.options.getString("session") ?? null;
-      const topK = interaction.options.getInteger("top_k") ?? 5;
-      const showSources = interaction.options.getBoolean("show_sources") ?? false;
-      await queryHandler.query(interaction, question, sessionFilter, topK, showSources);
-    }
+  if (group === null && sub === "ask") {
+    const question = interaction.options.getString("question");
+    const sessionFilter = interaction.options.getString("session") ?? null;
+    const topK = interaction.options.getInteger("top_k") ?? 5;
+    const showSources = interaction.options.getBoolean("show_sources") ?? false;
+    await queryHandler.query(interaction, question, sessionFilter, topK, showSources);
   }
 });
 

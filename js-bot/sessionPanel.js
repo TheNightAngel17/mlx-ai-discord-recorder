@@ -2,7 +2,7 @@
  * sessionPanel.js — Interactive "Session Control Panel" for the MLX AI Discord Recorder.
  *
  * Exports a SessionPanel class with:
- *   open(interaction)                  — /mlx-ai new-session: send the ephemeral panel
+ *   open(interaction)                  — /mlx-ai session: send the ephemeral panel
  *   handleChannelSelect(interaction)   — voice-channel select menu updated (IDLE guided step)
  *   handleSetNameButton(interaction)   — "Edit Session Details" button → show modal
  *   handleNameModal(interaction)       — modal submitted with session name
@@ -321,38 +321,28 @@ class SessionPanel {
   // ---------------------------------------------------------------------------
 
   /**
-   * Open the control panel in response to /mlx-ai new-session.
+   * Open the control panel in response to /mlx-ai session.
    *
    * @param {import('discord.js').ChatInputCommandInteraction} interaction
-   * @param {string|null} [sessionName]  Optional name supplied directly via the slash command option
    */
-  async open(interaction, sessionName = null) {
+  async open(interaction) {
     const panelId = this._newPanelId();
-
-    // Sanitize if a name was provided inline with the command
-    const sanitized = sessionName
-      ? (sessionName.replace(/[^\w-]/g, "_").replace(/^_+|_+$/g, "") || null)
-      : null;
 
     const state = {
       channelId: null,
       channelName: null,
-      sessionName: sanitized,
+      sessionName: null,
       sessionFolderName: null,
       whisperModel: this.config.whisper_model || "base",
       status: STATUS.IDLE,
       log: [],
     };
 
-    if (sanitized) {
-      this._log(state, `Session name set to \`${sanitized}\`.`);
-    }
-
     this.panels.set(panelId, state);
 
     const { embed, rows } = this._buildPanel(panelId, state);
     await interaction.reply({ embeds: [embed], components: rows, ephemeral: true });
-    this.logger.info(`Session control panel opened (panelId=${panelId}, sessionName=${sanitized ?? "unset"})`);
+    this.logger.info(`Session control panel opened (panelId=${panelId})`);
   }
 
   // ---------------------------------------------------------------------------
@@ -369,7 +359,7 @@ class SessionPanel {
     const state = this.panels.get(panelId);
     if (!state) {
       await interaction.reply({
-        content: "⚠️ This panel has expired. Run `/mlx-ai new-session` to open a new one.",
+        content: "⚠️ This panel has expired. Run `/mlx-ai session` to open a new one.",
         ephemeral: true,
       });
       return;
@@ -401,7 +391,7 @@ class SessionPanel {
     const state = this.panels.get(panelId);
     if (!state) {
       await interaction.reply({
-        content: "⚠️ This panel has expired. Run `/mlx-ai new-session` to open a new one.",
+        content: "⚠️ This panel has expired. Run `/mlx-ai session` to open a new one.",
         ephemeral: true,
       });
       return;
@@ -442,7 +432,7 @@ class SessionPanel {
     const state = this.panels.get(panelId);
     if (!state) {
       await interaction.reply({
-        content: "⚠️ This panel has expired. Run `/mlx-ai new-session` to open a new one.",
+        content: "⚠️ This panel has expired. Run `/mlx-ai session` to open a new one.",
         ephemeral: true,
       });
       return;
@@ -476,7 +466,7 @@ class SessionPanel {
     const state = this.panels.get(panelId);
     if (!state) {
       await interaction.reply({
-        content: "⚠️ This panel has expired. Run `/mlx-ai new-session` to open a new one.",
+        content: "⚠️ This panel has expired. Run `/mlx-ai session` to open a new one.",
         ephemeral: true,
       });
       return;
@@ -554,7 +544,7 @@ class SessionPanel {
     const state = this.panels.get(panelId);
     if (!state) {
       await interaction.reply({
-        content: "⚠️ This panel has expired. Run `/mlx-ai new-session` to open a new one.",
+        content: "⚠️ This panel has expired. Run `/mlx-ai session` to open a new one.",
         ephemeral: true,
       });
       return;
@@ -590,7 +580,7 @@ class SessionPanel {
     const state = this.panels.get(panelId);
     if (!state) {
       await interaction.reply({
-        content: "⚠️ This panel has expired. Run `/mlx-ai new-session` to open a new one.",
+        content: "⚠️ This panel has expired. Run `/mlx-ai session` to open a new one.",
         ephemeral: true,
       });
       return;
@@ -638,7 +628,8 @@ class SessionPanel {
         fakeInteraction,
         state.sessionFolderName,
         model,
-        defaultLang
+        defaultLang,
+        true
       );
     } catch (err) {
       this.logger.error(`Session panel postProcess failed: ${err.message}`);
@@ -658,7 +649,7 @@ class SessionPanel {
     const state = this.panels.get(panelId);
     if (!state) {
       await interaction.reply({
-        content: "⚠️ This panel has expired. Run `/mlx-ai new-session` to open a new one.",
+        content: "⚠️ This panel has expired. Run `/mlx-ai session` to open a new one.",
         ephemeral: true,
       });
       return;
