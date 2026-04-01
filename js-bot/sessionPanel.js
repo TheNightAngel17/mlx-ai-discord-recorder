@@ -160,8 +160,6 @@ class SessionPanel {
     );
 
     // Row 2 — Set session name button
-    // Use Primary (blue) style when no name has been entered yet so it reads
-    // as a clear call-to-action; switch to Secondary (grey) once a name is set.
     const labelText =
       sessionName
         ? `✏️ Name: ${sessionName.slice(0, 20)}${sessionName.length > 20 ? "…" : ""}`
@@ -171,7 +169,7 @@ class SessionPanel {
       new ButtonBuilder()
         .setCustomId(`panel_set_name:${panelId}`)
         .setLabel(labelText)
-        .setStyle(sessionName ? ButtonStyle.Secondary : ButtonStyle.Primary)
+        .setStyle(ButtonStyle.Secondary)
         .setDisabled(isLocked)
     );
 
@@ -358,21 +356,26 @@ class SessionPanel {
       return;
     }
 
+    const nameInput = new TextInputBuilder()
+      .setCustomId("session_name_input")
+      .setLabel("Session Name")
+      .setStyle(TextInputStyle.Short)
+      .setPlaceholder("e.g. Campaign1_Session4")
+      .setRequired(true)
+      .setMinLength(1)
+      .setMaxLength(80);
+
+    // Only pre-fill the modal when a name is already set — Discord rejects
+    // an empty-string value and throws DiscordAPIError[50035].
+    if (state.sessionName) {
+      nameInput.setValue(state.sessionName);
+    }
+
     const modal = new ModalBuilder()
       .setCustomId(`panel_name:${panelId}`)
       .setTitle("Set Session Name")
       .addComponents(
-        new ActionRowBuilder().addComponents(
-          new TextInputBuilder()
-            .setCustomId("session_name_input")
-            .setLabel("Session Name")
-            .setStyle(TextInputStyle.Short)
-            .setPlaceholder("e.g. Campaign1_Session4")
-            .setRequired(true)
-            .setMinLength(1)
-            .setMaxLength(80)
-            .setValue(state.sessionName ?? "")
-        )
+        new ActionRowBuilder().addComponents(nameInput)
       );
 
     await interaction.showModal(modal);
