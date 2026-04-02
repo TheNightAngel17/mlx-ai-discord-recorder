@@ -32,9 +32,6 @@ const {
   TextInputStyle,
 } = require("discord.js");
 
-// Discord enforces a 2000-char limit on messages; use 1900 to leave a safe margin.
-const DISCORD_MSG_LIMIT = 1900;
-
 // Panel status constants
 const STATUS = {
   IDLE: "idle",           // Panel just opened, nothing configured yet
@@ -665,14 +662,7 @@ class SessionPanel {
           };
 
           if (fs.existsSync(summaryPath)) {
-            // Read for the text preview; pass the path to AttachmentBuilder to avoid a second copy
-            const summaryContent = await fs.promises.readFile(summaryPath, "utf-8");
-            // Show the first ~1900 chars of the summary as message content
-            const preview = summaryContent.length <= DISCORD_MSG_LIMIT
-              ? summaryContent
-              : summaryContent.slice(0, DISCORD_MSG_LIMIT) + "\n… _(see attachment for full summary)_";
-            followUpPayload.content = preview;
-            // Attach the full file so users can download it
+            // Attach the summary file so users can download it (no text preview in the message)
             followUpPayload.files = [
               new AttachmentBuilder(summaryPath, {
                 name: `${state.sessionFolderName}_summary.md`,

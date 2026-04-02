@@ -12,9 +12,6 @@ const { spawn } = require("child_process");
 const path = require("path");
 const fs = require("fs");
 
-// Discord enforces a 2000-char limit on messages; use 1900 to leave a safe margin.
-const DISCORD_MSG_LIMIT = 1900;
-
 class PostProcessor {
   /**
    * @param {object} config   Parsed config.yaml object
@@ -186,12 +183,7 @@ class PostProcessor {
             // Post session summary to the announce channel if it was generated
             const summaryPath = path.join(sessionDir, "_session_summary.md");
             if (fs.existsSync(summaryPath)) {
-              const summaryContent = await fs.promises.readFile(summaryPath, "utf-8");
-              const preview = summaryContent.length <= DISCORD_MSG_LIMIT
-                ? summaryContent
-                : summaryContent.slice(0, DISCORD_MSG_LIMIT) + "\n… _(see attachment for full summary)_";
               await announceChannel.send({
-                content: preview,
                 files: [new AttachmentBuilder(summaryPath, { name: `${sessionName}_summary.md` })],
               });
             }
@@ -365,12 +357,7 @@ class PostProcessor {
           if (announceChannel) {
             const summaryPath = path.join(sessionDir, "_session_summary.md");
             if (fs.existsSync(summaryPath)) {
-              const summaryContent = await fs.promises.readFile(summaryPath, "utf-8");
-              const preview = summaryContent.length <= DISCORD_MSG_LIMIT
-                ? summaryContent
-                : summaryContent.slice(0, DISCORD_MSG_LIMIT) + "\n… _(see attachment for full summary)_";
               await announceChannel.send({
-                content: preview,
                 files: [new AttachmentBuilder(summaryPath, { name: `${sessionName}_summary.md` })],
               });
             }
