@@ -2,11 +2,12 @@
  * postProcessor.js — Spawns the Python post-processing orchestrator and reports results.
  *
  * Exports a PostProcessor class with:
- *   postProcess(interaction, sessionName, model, language) — run post-processing
+ *   postProcess(interaction, sessionName, model, language, silent, generateSummary) — run post-processing
  */
 
 "use strict";
 
+const { AttachmentBuilder } = require("discord.js");
 const { spawn } = require("child_process");
 const path = require("path");
 const fs = require("fs");
@@ -37,8 +38,10 @@ class PostProcessor {
    * @param {string|null} language Language code or null for auto-detect
    * @param {boolean} [silent=false]  When true, suppresses announce-channel messages.
    *   Pass true when called from the session panel to avoid duplicate chat messages.
+   * @param {boolean} [generateSummary=true]  When true, passes --summarize to process.py.
+   *   When false, passes --no-summarize to skip session summary generation.
    */
-  async postProcess(interaction, sessionName, model, language, silent = false) {
+  async postProcess(interaction, sessionName, model, language, silent = false, generateSummary = true) {
     // Guard: only one post-processing run at a time
     if (this.isProcessing) {
       await interaction.reply({
@@ -100,6 +103,9 @@ class PostProcessor {
     const args = [scriptPath, sessionName, "--model", model];
     if (language) {
       args.push("--language", language);
+    }
+    if (!generateSummary) {
+      args.push("--no-summarize");
     }
 
     // Announce start (skipped when called silently from the session panel)
@@ -173,6 +179,14 @@ class PostProcessor {
             await announceChannel.send(
               `✅ Post-processing complete for session \`${sessionName}\` — files saved to \`${sessionDir}\``
             );
+
+            // Post session summary to the announce channel if it was generated
+            const summaryPath = path.join(sessionDir, "_session_summary.md");
+            if (fs.existsSync(summaryPath)) {
+              await announceChannel.send({
+                files: [new AttachmentBuilder(summaryPath, { name: `${sessionName}_summary.md` })],
+              });
+            }
           }
         } else {
           this.logger.error(
@@ -219,8 +233,9 @@ class PostProcessor {
    * @param {string} sessionName
    * @param {string} model
    * @param {string|null} language
+   * @param {boolean} [generateSummary=true]  When false, passes --no-summarize to process.py.
    */
-  async postProcessFromButton(interaction, sessionName, model, language) {
+  async postProcessFromButton(interaction, sessionName, model, language, generateSummary = true) {
     // Guard: only one post-processing run at a time
     if (this.isProcessing) {
       await interaction.followUp({
@@ -283,6 +298,11 @@ class PostProcessor {
     if (language) {
       args.push("--language", language);
     }
+    if (!generateSummary) {
+      args.push("--no-summarize");
+    }
+
+    const announceChannel = await this._getAnnounceChannel(interaction.guild);
 
     return new Promise((resolve) => {
       const proc = spawn(pythonExe, args, { cwd: repoRoot });
@@ -332,6 +352,16 @@ class PostProcessor {
           }
 
           await startMsg.edit({ content: replyParts.join("\n") });
+
+          // Post session summary to the announce channel if it was generated
+          if (announceChannel) {
+            const summaryPath = path.join(sessionDir, "_session_summary.md");
+            if (fs.existsSync(summaryPath)) {
+              await announceChannel.send({
+                files: [new AttachmentBuilder(summaryPath, { name: `${sessionName}_summary.md` })],
+              });
+            }
+          }
         } else {
           this.logger.error(
             `Post-processing failed for session ${sessionName} (exit code ${code}): ${stderr}`

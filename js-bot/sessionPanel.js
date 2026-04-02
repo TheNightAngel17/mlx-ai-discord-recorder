@@ -10,12 +10,17 @@
  *   handleStopButton(interaction)      — "⏹ Stop Recording" button pressed
  *   handlePostProcessButton(interaction) — "⚙️ Post-Process" button pressed
  *   handleModelSelect(interaction)     — Whisper model dropdown changed (STOPPED state)
+ *   handleSummaryToggle(interaction)   — "Generate Summary" toggle button pressed (STOPPED state)
  */
 
 "use strict";
 
+const fs = require("fs");
+const path = require("path");
+
 const {
   ActionRowBuilder,
+  AttachmentBuilder,
   ButtonBuilder,
   ButtonStyle,
   ChannelSelectMenuBuilder,
@@ -115,8 +120,8 @@ class SessionPanel {
    *   READY               → channel dropdown  +  [✏️ Edit Session Details]  +  [⏺ Start Recording]
    *   RECORDING           → [⏹ Stop Recording]
    *   STOPPING            → [⏹ Stopping… (disabled)]
-   *   STOPPED             → model dropdown  +  [⚙️ Post-Process] (green)
-   *   PROCESSING          → model dropdown (disabled)  +  [⏳ Processing… (disabled)]
+   *   STOPPED             → model dropdown  +  [☑ Generate Summary toggle]  +  [⚙️ Post-Process] (green)
+   *   PROCESSING          → model dropdown (disabled)  +  [☑ Generate Summary (disabled)]  +  [⏳ Processing… (disabled)]
    *   DONE                → (no components — clean embed only)
    *
    * @param {string} panelId
@@ -124,7 +129,7 @@ class SessionPanel {
    * @returns {{ embed: EmbedBuilder, rows: ActionRowBuilder[] }}
    */
   _buildPanel(panelId, state) {
-    const { channelId, channelName, sessionName, sessionFolderName, status, log, whisperModel } = state;
+    const { channelId, channelName, sessionName, sessionFolderName, status, log, whisperModel, generateSummary } = state;
 
     const embed = new EmbedBuilder()
       .setTitle("🎙️ Session Control Panel")
@@ -227,6 +232,16 @@ class SessionPanel {
       rows.push(
         new ActionRowBuilder().addComponents(
           new ButtonBuilder()
+            .setCustomId(`panel_summary_toggle:${panelId}`)
+            .setLabel(generateSummary ? "☑ Generate Summary" : "☐ Skip Summary")
+            .setStyle(generateSummary ? ButtonStyle.Success : ButtonStyle.Secondary)
+            .setDisabled(modelLocked)
+        )
+      );
+
+      rows.push(
+        new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
             .setCustomId(`panel_post_process:${panelId}`)
             .setLabel(status === STATUS.PROCESSING ? "⏳ Processing…" : "⚙️ Post-Process")
             .setStyle(status === STATUS.PROCESSING ? ButtonStyle.Secondary : ButtonStyle.Success)
@@ -318,6 +333,7 @@ class SessionPanel {
       sessionName: null,
       sessionFolderName: null,
       whisperModel: this.config.whisper_model || "base",
+      generateSummary: this.config.auto_summarize !== false,
       status: STATUS.IDLE,
       log: [],
     };
@@ -597,7 +613,7 @@ class SessionPanel {
     state.status = STATUS.PROCESSING;
     this._log(
       state,
-      `Starting post-processing (model: ${model})…`
+      `Starting post-processing (model: ${model}, summary: ${state.generateSummary ? "on" : "off"})…`
     );
     const { embed, rows } = this._buildPanel(panelId, state);
     await interaction.update({ embeds: [embed], components: rows });
@@ -623,7 +639,8 @@ class SessionPanel {
         state.sessionFolderName,
         model,
         defaultLang,
-        true
+        true,
+        state.generateSummary
       );
 
       // If post-processing completed successfully, post the full DONE embed as a
@@ -633,10 +650,27 @@ class SessionPanel {
       if (state.status === STATUS.DONE) {
         try {
           const { embed: doneEmbed } = this._buildPanel(panelId, state);
-          await interaction.followUp({
+
+          // Build the session summary attachment (if available)
+          const outputDir = this.config.output_directory || "./recordings";
+          const sessionDir = path.resolve(outputDir, state.sessionFolderName);
+          const summaryPath = path.join(sessionDir, "_session_summary.md");
+
+          const followUpPayload = {
             embeds: [doneEmbed],
             ephemeral: false,
-          });
+          };
+
+          if (fs.existsSync(summaryPath)) {
+            // Attach the summary file so users can download it (no text preview in the message)
+            followUpPayload.files = [
+              new AttachmentBuilder(summaryPath, {
+                name: `${state.sessionFolderName}_summary.md`,
+              }),
+            ];
+          }
+
+          await interaction.followUp(followUpPayload);
         } catch (followUpErr) {
           this.logger.warn(`Failed to post public completion notice: ${followUpErr.message}`);
         }
@@ -666,6 +700,28 @@ class SessionPanel {
     }
 
     state.whisperModel = interaction.values[0];
+    const { embed, rows } = this._buildPanel(panelId, state);
+    await interaction.update({ embeds: [embed], components: rows });
+  }
+  /**
+   * "Generate Summary" toggle button pressed (shown in the STOPPED state).
+   *
+   * Flips state.generateSummary and re-renders the panel to reflect the new value.
+   *
+   * @param {import('discord.js').ButtonInteraction} interaction
+   */
+  async handleSummaryToggle(interaction) {
+    const panelId = interaction.customId.slice("panel_summary_toggle:".length);
+    const state = this.panels.get(panelId);
+    if (!state) {
+      await interaction.reply({
+        content: "⚠️ This panel has expired. Run `/mlx-ai session` to open a new one.",
+        ephemeral: true,
+      });
+      return;
+    }
+
+    state.generateSummary = !state.generateSummary;
     const { embed, rows } = this._buildPanel(panelId, state);
     await interaction.update({ embeds: [embed], components: rows });
   }

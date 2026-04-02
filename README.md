@@ -30,6 +30,7 @@ A Discord bot that records voice channel audio, transcribes it with [OpenAI Whis
 - 🎵 **Audio merge** — mix all per-user WAVs into a single combined MP3
 - 📝 **Whisper transcription** — per-user and combined transcripts with timestamps
 - 🧠 **Vector embeddings** — chunk and embed transcripts into ChromaDB
+- 📋 **Automatic session summaries** — LLM-generated narrative summaries with key moments, NPCs, and locations posted to Discord
 - 🔍 **RAG query** — ask natural-language questions about your sessions via Discord or CLI
 - 🔌 **Multi-provider LLM support** — Ollama (local), OpenAI, and Anthropic
 
@@ -254,6 +255,9 @@ pip install -r py-query/requirements.txt
 | `ollama_base_url` | `http://localhost:11434` | Ollama API base URL |
 | `query_api_host` | `0.0.0.0` | Host the RAG API server (`py-query/app.py`) binds to |
 | `query_api_port` | `8100` | Port the RAG API server listens on |
+| `auto_summarize` | `true` | Default state of the **☑ Generate Summary** toggle in the `/mlx-ai session` panel |
+| `summary_max_tokens` | `2000` | Approximate token budget for the LLM when generating session summaries |
+| `summary_max_input_tokens` | `32000` | Maximum input tokens per summarization chunk (adjust to your model's context window) |
 
 > ⚠️ **Warning:** Changing `embedding_provider` or `embedding_model` after vectorizing sessions requires re-running `python py-process/vectorize.py --all --force`.
 
@@ -335,9 +339,12 @@ Click **Save Changes**.
 The full workflow from recording to searchable archive:
 
 ```
-Record ──► Transcribe ──► Merge Audio ──► Vectorize ──► Query
-  │            │               │               │           │
- WAVs        .txt files     MP3 mix      ChromaDB     LLM answer
+Record ──► Transcribe ──► Merge Audio ──► Vectorize ──► Summarize ──► Query
+  │            │               │               │              │           │
+ WAVs        .txt files     MP3 mix      ChromaDB      .json/.md      LLM answer
+                                          (chunks)    + ChromaDB
+                                                      (summary +
+                                                       key moments)
 ```
 
 | Step | Trigger | Tool |
@@ -346,9 +353,10 @@ Record ──► Transcribe ──► Merge Audio ──► Vectorize ──► 
 | **Transcribe** | `/mlx-ai session` → ⚙️ Post-Process or `python py-process/transcribe.py` | OpenAI Whisper |
 | **Merge Audio** | `/mlx-ai session` → ⚙️ Post-Process or `python py-process/merge_audio.py` | pydub + ffmpeg |
 | **Vectorize** | `/mlx-ai session` → ⚙️ Post-Process or `python py-process/vectorize.py` | ChromaDB + Ollama/OpenAI |
+| **Summarize** | `/mlx-ai session` → ☑ Generate Summary toggle + ⚙️ Post-Process, or `python py-process/summarize.py` | LLM (Ollama/OpenAI/Anthropic) |
 | **Query** | `/mlx-ai ask` or `python py-query/query.py` | RAG (embed → retrieve → chat) |
 
-The **post-process** command runs steps 2–4 automatically in sequence. Each step can also be run individually.
+The **⚙️ Post-Process** button runs steps 2–5 automatically in sequence. Each step can also be run individually.
 
 ---
 
@@ -376,10 +384,11 @@ mlx-ai-discord-recorder/
 │   └── README.md             # JS bot documentation
 │
 ├── py-process/               # Audio processing pipeline (Python)
-│   ├── process.py            # Orchestrator — runs transcribe → merge → vectorize
+│   ├── process.py            # Orchestrator — runs transcribe → merge → vectorize → summarize
 │   ├── transcribe.py         # Whisper transcription (WAVs → .txt files)
 │   ├── merge_audio.py        # Mix per-user WAVs → combined WAV + MP3
 │   ├── vectorize.py          # Chunk + embed transcripts → ChromaDB
+│   ├── summarize.py          # LLM session summaries → _session_summary.json/.md + ChromaDB
 │   ├── vectordb_helper.py    # CLI tool to inspect/search/manage the vector DB
 │   ├── requirements.txt      # Python dependencies
 │   └── README.md             # Processing pipeline documentation

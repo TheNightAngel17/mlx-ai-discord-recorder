@@ -155,8 +155,9 @@ def main():
                 }
             )
 
-    # Sort by start time for a chronological combined transcript
-    all_segments.sort(key=lambda s: s["start"])
+    # Sort chronologically: primary key is end time, secondary key is start time.
+    # This handles overlapping segments from multiple speakers correctly.
+    all_segments.sort(key=lambda s: (s["end"], s["start"]))
 
     combined_path = session_dir / "_combined_transcript.txt"
     with open(combined_path, "w", encoding="utf-8") as f:

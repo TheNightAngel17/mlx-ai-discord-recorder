@@ -60,3 +60,30 @@ query_api_port: 8100        # Port the API server listens on
 # API keys for cloud providers go in .env — never in this file:
 #   OPENAI_API_KEY=sk-...
 #   ANTHROPIC_API_KEY=sk-ant-...
+
+# Session summary settings
+# auto_summarize: when true, process.py automatically runs summarize.py after vectorization.
+#   Set to false to skip automatic summarization (you can still run summarize.py manually).
+auto_summarize: true
+# summary_max_tokens: approximate token budget for the LLM when generating session summaries.
+#   Controls how long the summary output is. Larger values produce more detailed summaries
+#   but require more context window capacity from the chat model.
+summary_max_tokens: 2000
+# summary_max_input_tokens: maximum input tokens per summarization chunk.
+#   Transcripts longer than (summary_max_input_tokens × 4) characters are automatically
+#   split and processed with map-reduce summarization.
+#   Adjust based on your LLM provider's context window:
+#
+#   Provider/Model                  | Context Window | Recommended setting
+#   --------------------------------|----------------|--------------------
+#   OpenAI GPT-4o / GPT-4o-mini    | 128K tokens    | 100000
+#   Anthropic Claude 3.5 Sonnet     | 200K tokens    | 150000
+#   Anthropic Claude 3 Opus         | 200K tokens    | 150000
+#   Ollama Llama 3.1 8B/70B         | 128K tokens    | 32000 (set PARAMETER num_ctx 32000 in Modelfile)
+#   Ollama Llama 3 8B               |   8K tokens    | 6000  (set PARAMETER num_ctx 6000 in Modelfile)
+#   Ollama Mixtral 8x7B             |  32K tokens    | 24000
+#   Ollama Mistral 7B               |   8K tokens    | 6000  (set PARAMETER num_ctx 6000 in Modelfile)
+#   Ollama Qwen2.5 7B/14B           | 128K tokens    | 32000
+#
+#   Rule of thumb: ~75% of your model's context window. 1 token ≈ 4 characters.
+summary_max_input_tokens: 32000
