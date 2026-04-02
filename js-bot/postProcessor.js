@@ -7,6 +7,7 @@
 
 "use strict";
 
+const { AttachmentBuilder } = require("discord.js");
 const { spawn } = require("child_process");
 const path = require("path");
 const fs = require("fs");
@@ -185,22 +186,14 @@ class PostProcessor {
             // Post session summary to the announce channel if it was generated
             const summaryPath = path.join(sessionDir, "_session_summary.md");
             if (fs.existsSync(summaryPath)) {
-              const summaryContent = fs.readFileSync(summaryPath, "utf-8");
-              // Discord message limit is 2000 chars; split into header + body if needed
-              if (summaryContent.length <= DISCORD_MSG_LIMIT) {
-                await announceChannel.send(summaryContent);
-              } else {
-                // Post in two chunks: first ~1900 chars, then the rest truncated
-                await announceChannel.send(summaryContent.slice(0, DISCORD_MSG_LIMIT) + "\n…");
-                const remainder = summaryContent.slice(DISCORD_MSG_LIMIT);
-                if (remainder.trim()) {
-                  await announceChannel.send(
-                    remainder.length <= DISCORD_MSG_LIMIT
-                      ? remainder
-                      : remainder.slice(0, DISCORD_MSG_LIMIT) + "\n… _(summary truncated)_"
-                  );
-                }
-              }
+              const summaryContent = await fs.promises.readFile(summaryPath, "utf-8");
+              const preview = summaryContent.length <= DISCORD_MSG_LIMIT
+                ? summaryContent
+                : summaryContent.slice(0, DISCORD_MSG_LIMIT) + "\n… _(see attachment for full summary)_";
+              await announceChannel.send({
+                content: preview,
+                files: [new AttachmentBuilder(summaryPath, { name: `${sessionName}_summary.md` })],
+              });
             }
           }
         } else {
@@ -372,20 +365,14 @@ class PostProcessor {
           if (announceChannel) {
             const summaryPath = path.join(sessionDir, "_session_summary.md");
             if (fs.existsSync(summaryPath)) {
-              const summaryContent = fs.readFileSync(summaryPath, "utf-8");
-              if (summaryContent.length <= DISCORD_MSG_LIMIT) {
-                await announceChannel.send(summaryContent);
-              } else {
-                await announceChannel.send(summaryContent.slice(0, DISCORD_MSG_LIMIT) + "\n…");
-                const remainder = summaryContent.slice(DISCORD_MSG_LIMIT);
-                if (remainder.trim()) {
-                  await announceChannel.send(
-                    remainder.length <= DISCORD_MSG_LIMIT
-                      ? remainder
-                      : remainder.slice(0, DISCORD_MSG_LIMIT) + "\n… _(summary truncated)_"
-                  );
-                }
-              }
+              const summaryContent = await fs.promises.readFile(summaryPath, "utf-8");
+              const preview = summaryContent.length <= DISCORD_MSG_LIMIT
+                ? summaryContent
+                : summaryContent.slice(0, DISCORD_MSG_LIMIT) + "\n… _(see attachment for full summary)_";
+              await announceChannel.send({
+                content: preview,
+                files: [new AttachmentBuilder(summaryPath, { name: `${sessionName}_summary.md` })],
+              });
             }
           }
         } else {

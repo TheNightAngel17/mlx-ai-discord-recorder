@@ -15,8 +15,12 @@
 
 "use strict";
 
+const fs = require("fs");
+const path = require("path");
+
 const {
   ActionRowBuilder,
+  AttachmentBuilder,
   ButtonBuilder,
   ButtonStyle,
   ChannelSelectMenuBuilder,
@@ -27,6 +31,9 @@ const {
   TextInputBuilder,
   TextInputStyle,
 } = require("discord.js");
+
+// Discord enforces a 2000-char limit on messages; use 1900 to leave a safe margin.
+const DISCORD_MSG_LIMIT = 1900;
 
 // Panel status constants
 const STATUS = {
@@ -646,10 +653,34 @@ class SessionPanel {
       if (state.status === STATUS.DONE) {
         try {
           const { embed: doneEmbed } = this._buildPanel(panelId, state);
-          await interaction.followUp({
+
+          // Build the session summary attachment (if available)
+          const outputDir = this.config.output_directory || "./recordings";
+          const sessionDir = path.resolve(outputDir, state.sessionFolderName);
+          const summaryPath = path.join(sessionDir, "_session_summary.md");
+
+          const followUpPayload = {
             embeds: [doneEmbed],
             ephemeral: false,
-          });
+          };
+
+          if (fs.existsSync(summaryPath)) {
+            // Read for the text preview; pass the path to AttachmentBuilder to avoid a second copy
+            const summaryContent = await fs.promises.readFile(summaryPath, "utf-8");
+            // Show the first ~1900 chars of the summary as message content
+            const preview = summaryContent.length <= DISCORD_MSG_LIMIT
+              ? summaryContent
+              : summaryContent.slice(0, DISCORD_MSG_LIMIT) + "\n… _(see attachment for full summary)_";
+            followUpPayload.content = preview;
+            // Attach the full file so users can download it
+            followUpPayload.files = [
+              new AttachmentBuilder(summaryPath, {
+                name: `${state.sessionFolderName}_summary.md`,
+              }),
+            ];
+          }
+
+          await interaction.followUp(followUpPayload);
         } catch (followUpErr) {
           this.logger.warn(`Failed to post public completion notice: ${followUpErr.message}`);
         }
