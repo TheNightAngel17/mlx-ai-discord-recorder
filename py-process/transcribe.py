@@ -12,6 +12,7 @@ Examples:
 """
 
 import argparse
+import json
 import os
 import sys
 import time
@@ -49,11 +50,50 @@ def transcribe_wav(model: whisper.Whisper, wav_path: Path, language: str | None)
     return result
 
 
-def write_transcript(username: str, result: dict, output_path: Path) -> None:
-    """Write a per-user transcript .txt file with timestamps."""
+def load_user_metadata(wav_path: Path) -> dict:
+    """
+    Load the per-user metadata JSON written by the JS recorder alongside the WAV.
+
+    Returns a dict with at least these keys (all values default to 0 when the
+    file is absent or malformed):
+        session_start_ms      — absolute Unix timestamp (ms) when the session started.
+        audio_start_offset_ms — ms from session start to when this user was subscribed;
+                                equals 0 for users present from the beginning, and a
+                                positive value for mid-session joiners.
+    """
+    meta_path = wav_path.with_suffix(".metadata.json")
+    if not meta_path.exists():
+        return {"session_start_ms": 0, "audio_start_offset_ms": 0}
+    try:
+        with open(meta_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return {
+            "session_start_ms": int(data.get("session_start_ms", 0)),
+            "audio_start_offset_ms": int(data.get("audio_start_offset_ms", 0)),
+        }
+    except (json.JSONDecodeError, OSError, ValueError) as exc:
+        print(f"Warning: could not read {meta_path}: {exc}", file=sys.stderr)
+        return {"session_start_ms": 0, "audio_start_offset_ms": 0}
+
+
+def write_transcript(username: str, result: dict, output_path: Path, join_offset_s: float = 0.0) -> None:
+    """
+    Write a per-user transcript .txt file with session-relative timestamps.
+
+    Args:
+        username: The sanitised Discord username.
+        result: The Whisper transcription result dict.
+        output_path: Destination .txt file path.
+        join_offset_s: Seconds from session start when this user's audio began.
+                       Used only in the header comment; timestamps come from
+                       the silence-padded WAV and are already session-relative.
+    """
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(f"# Transcript for {username}\n")
-        f.write(f"# Detected language: {result.get('language', 'unknown')}\n\n")
+        f.write(f"# Detected language: {result.get('language', 'unknown')}\n")
+        if join_offset_s > 0.0:
+            f.write(f"# Joined session at: {format_timestamp(join_offset_s)}\n")
+        f.write("\n")
 
         for segment in result.get("segments", []):
             start = format_timestamp(segment["start"])
@@ -123,6 +163,7 @@ def main():
 
     # Transcribe each user's WAV (cache results for reuse in combined transcript)
     results_by_user: dict[str, dict] = {}
+    metadata_by_user: dict[str, dict] = {}
     for wav_path in wav_files:
         username = wav_path.stem  # filename without extension = sanitised username
         print(f"Transcribing {username}...", end=" ", flush=True)
@@ -132,25 +173,42 @@ def main():
         elapsed = time.time() - t0
 
         results_by_user[username] = result
+        metadata_by_user[username] = load_user_metadata(wav_path)
 
         # Write per-user transcript
+        join_offset_s = metadata_by_user[username]["audio_start_offset_ms"] / 1000.0
         txt_path = session_dir / f"{username}.txt"
-        write_transcript(username, result, txt_path)
+        write_transcript(username, result, txt_path, join_offset_s)
 
         segment_count = len(result.get("segments", []))
         detected_lang = result.get("language", "?")
         print(f"done ({elapsed:.1f}s, {segment_count} segments, lang={detected_lang})")
         print(f"  -> {txt_path}")
 
-    # Write a combined transcript with all users merged by timestamp
+    # Write a combined transcript with all users merged by timestamp.
+    # The per-user WAVs are silence-padded to session zero by the JS recorder,
+    # so Whisper timestamps are already session-relative.  However, Whisper can
+    # drift on very long silent sections, occasionally placing a segment
+    # slightly before the user actually joined.  We use audio_start_offset_ms
+    # from the metadata as an authoritative lower bound: no segment can start
+    # before the user was subscribed.
     all_segments = []
     for username, result in results_by_user.items():
+        join_offset_s = metadata_by_user[username]["audio_start_offset_ms"] / 1000.0
         for seg in result.get("segments", []):
+            # Clamp timestamps to the user's authoritative join time so that
+            # Whisper timing drift never places speech before the user joined.
+            # Skip the segment entirely if it ends before the join time — those
+            # are Whisper artefacts in the leading silence.
+            if seg["end"] < join_offset_s:
+                continue
+            clamped_start = max(seg["start"], join_offset_s)
+            clamped_end = seg["end"]  # end is already >= join_offset_s
             all_segments.append(
                 {
                     "username": username,
-                    "start": seg["start"],
-                    "end": seg["end"],
+                    "start": clamped_start,
+                    "end": clamped_end,
                     "text": seg["text"].strip(),
                 }
             )
