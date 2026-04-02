@@ -257,6 +257,7 @@ pip install -r py-query/requirements.txt
 | `query_api_port` | `8100` | Port the RAG API server listens on |
 | `auto_summarize` | `true` | Automatically generate session summaries after vectorization |
 | `summary_max_tokens` | `2000` | Approximate token budget for the LLM when generating session summaries |
+| `summary_max_input_tokens` | `32000` | Maximum input tokens per summarization chunk (adjust to your model's context window) |
 
 > ⚠️ **Warning:** Changing `embedding_provider` or `embedding_model` after vectorizing sessions requires re-running `python py-process/vectorize.py --all --force`.
 

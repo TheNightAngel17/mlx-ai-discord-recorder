@@ -12,6 +12,11 @@ Outputs (written to the session folder):
 Also stores the summary narrative and each key moment as ChromaDB chunks for
 improved cross-session RAG query quality.
 
+For long transcripts that exceed the configured ``summary_max_input_tokens`` limit, a
+map-reduce strategy is used: the transcript is split into chunks, each chunk is summarised
+independently (map), then all partial summaries are combined into a single final summary
+(reduce).  Short transcripts that fit within the limit use a single-pass approach.
+
 Usage:
     python summarize.py <session_name>
     python summarize.py --all
@@ -23,6 +28,7 @@ Examples:
 
 import argparse
 import json
+import logging
 import re
 import sys
 import time
@@ -40,6 +46,7 @@ sys.path.insert(0, str(_REPO_ROOT / "py-query"))
 import chromadb  # noqa: E402
 from providers import get_chat_provider, get_embedding_provider  # noqa: E402
 
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Config
@@ -59,19 +66,18 @@ def load_config() -> dict:
 # Constants
 # ---------------------------------------------------------------------------
 
-# Message appended to transcripts that are truncated before being sent to the LLM.
-# Input size is derived from summary_max_tokens: each output token ≈ 4 chars, and we
-# allow 16× the output budget as input headroom (e.g. 2000 tokens → ~128 000 chars input).
-_TRUNCATION_NOTICE = "\n\n[Transcript truncated for length]"
+# Ollama's default context window is small (~4–8K tokens). Warn users when the
+# transcript is large enough that results may be silently truncated by the model.
+_OLLAMA_CONTEXT_WARN_CHARS = 32_000   # ≈ 8K tokens at 4 chars/token
 
 
 # ---------------------------------------------------------------------------
-# System prompt
+# System prompts
 # ---------------------------------------------------------------------------
 
 def _build_system_prompt(summary_max_tokens: int) -> str:
     """
-    Build the system prompt for the summarization request.
+    Build the system prompt for a full (single-pass or reduce) summarization request.
 
     Args:
         summary_max_tokens: Approximate token budget for the LLM response.
@@ -110,6 +116,49 @@ Rules:
 - List only NPCs, locations, and items that were meaningfully discussed.
 - Timestamps: use the start time in seconds from the transcript line nearest to the event. \
 Use 0 if unknown.
+- Output ONLY the JSON object. Do not include markdown code fences or any other text.
+"""
+
+
+def _build_chunk_system_prompt() -> str:
+    """
+    Build the system prompt used in the **map** phase of map-reduce summarization.
+
+    Each transcript chunk is summarised independently with this prompt.  The resulting
+    partial summaries are later merged by a reduce call using _build_system_prompt().
+    """
+    return """\
+You are a session chronicler for a tabletop role-playing game (TTRPG). You will be given a \
+PARTIAL section of a longer session transcript and must produce a structured JSON partial summary.
+
+Your response MUST be valid JSON (no markdown fences, no extra text) matching this schema exactly:
+
+{
+  "partial_narrative": "<1-2 paragraph narrative summary of events in this section>",
+  "key_moments": [
+    {
+      "timestamp": <float seconds from session start, or 0 if unknown>,
+      "description": "<one sentence description>",
+      "category": "<one of: combat, plot_reveal, npc_introduction, funny_moment, decision_point>",
+      "context": "<1-2 sentences of surrounding context>"
+    }
+  ],
+  "npcs": [
+    {"name": "<name>", "context": "<brief description>"}
+  ],
+  "locations": [
+    {"name": "<name>", "context": "<brief description>"}
+  ],
+  "items": [
+    {"name": "<name>", "context": "<brief description>"}
+  ]
+}
+
+Rules:
+- Include up to 5 key moments from this section only. Focus on the most impactful events.
+- Key moment categories: combat, plot_reveal, npc_introduction, funny_moment, decision_point
+- List only NPCs, locations, and items that appear in this section.
+- Timestamps: use the start time in seconds from the transcript line nearest to the event.
 - Output ONLY the JSON object. Do not include markdown code fences or any other text.
 """
 
@@ -157,15 +206,175 @@ def read_transcript(path: Path) -> tuple[str, list[str]]:
 
 
 # ---------------------------------------------------------------------------
-# LLM summarization
+# LLM response parsing helpers
 # ---------------------------------------------------------------------------
+
+def _strip_markdown_fences(raw: str) -> str:
+    """Strip accidental markdown code fences that some models add despite instructions."""
+    raw = raw.strip()
+    if raw.startswith("```"):
+        raw = re.sub(r"^```[a-zA-Z]*\n?", "", raw)
+        raw = re.sub(r"\n?```$", "", raw)
+        raw = raw.strip()
+    return raw
+
+
+def _parse_json_response(raw: str, context: str = "") -> dict:
+    """
+    Parse an LLM JSON response, exiting with a descriptive error on failure.
+
+    Args:
+        raw:     Raw text returned by the LLM.
+        context: Optional description of where this response came from (for error messages).
+    """
+    raw = _strip_markdown_fences(raw)
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        label = f" ({context})" if context else ""
+        print(f"  Error: LLM returned invalid JSON{label}: {exc}", file=sys.stderr)
+        print(f"  Raw response (first 500 chars): {raw[:500]}", file=sys.stderr)
+        sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# Transcript chunking
+# ---------------------------------------------------------------------------
+
+def _chunk_transcript(text: str, max_chars: int) -> list[str]:
+    """
+    Split *text* into chunks of at most *max_chars* characters, splitting only on
+    newline boundaries so that no transcript line is cut mid-sentence.
+
+    Args:
+        text:      Full transcript text.
+        max_chars: Maximum number of characters per chunk.
+
+    Returns:
+        List of non-empty chunk strings.
+    """
+    if max_chars <= 0:
+        return [text]
+
+    lines = text.splitlines(keepends=True)
+    chunks: list[str] = []
+    current: list[str] = []
+    current_len = 0
+
+    for line in lines:
+        line_len = len(line)
+        # If a single line exceeds max_chars, it must be kept as its own chunk.
+        if current_len + line_len > max_chars and current:
+            chunks.append("".join(current))
+            current = []
+            current_len = 0
+        current.append(line)
+        current_len += line_len
+
+    if current:
+        chunks.append("".join(current))
+
+    return [c for c in chunks if c.strip()]
+
+
+# ---------------------------------------------------------------------------
+# LLM summarization — single-pass and map-reduce
+# ---------------------------------------------------------------------------
+
+def _call_provider(provider, system_prompt: str, user_message: str) -> str:
+    """Call the chat provider and return the raw response string."""
+    return provider.chat(system_prompt, user_message)
+
+
+def _map_chunk(
+    chunk: str,
+    chunk_idx: int,
+    total_chunks: int,
+    provider,
+) -> dict:
+    """
+    Summarise a single transcript chunk (map phase).
+
+    Args:
+        chunk:        Partial transcript text for this chunk.
+        chunk_idx:    0-based chunk index (for progress display).
+        total_chunks: Total number of chunks (for progress display).
+        provider:     Instantiated chat provider.
+
+    Returns:
+        Parsed partial summary dict (keys: partial_narrative, key_moments, npcs,
+        locations, items).
+    """
+    system_prompt = _build_chunk_system_prompt()
+    print(
+        f"  Map chunk {chunk_idx + 1}/{total_chunks} "
+        f"({len(chunk):,} chars)…",
+        end=" ",
+        flush=True,
+    )
+    t0 = time.time()
+    raw = _call_provider(provider, system_prompt, chunk)
+    elapsed = time.time() - t0
+    print(f"done ({elapsed:.1f}s)")
+    return _parse_json_response(raw, context=f"chunk {chunk_idx + 1}")
+
+
+def _reduce_chunks(
+    partial_summaries: list[dict],
+    provider,
+    summary_max_tokens: int,
+) -> dict:
+    """
+    Combine all partial chunk summaries into a single final summary (reduce phase).
+
+    The partial summaries are serialised as JSON and fed back to the LLM with the
+    full structured output prompt so the result conforms to the final schema.
+
+    Args:
+        partial_summaries: List of dicts returned by _map_chunk().
+        provider:          Instantiated chat provider.
+        summary_max_tokens: Token budget hint for the LLM response.
+
+    Returns:
+        Final summary dict matching the schema defined in _build_system_prompt().
+    """
+    combined_text = json.dumps(
+        {
+            "instruction": (
+                "The following are partial summaries from sequential sections of a single "
+                "TTRPG session transcript. Combine them into one cohesive final summary."
+            ),
+            "partial_summaries": partial_summaries,
+        },
+        indent=2,
+        ensure_ascii=False,
+    )
+    system_prompt = _build_system_prompt(summary_max_tokens)
+    print(
+        f"  Reduce: combining {len(partial_summaries)} partial summaries "
+        f"({len(combined_text):,} chars)…",
+        end=" ",
+        flush=True,
+    )
+    t0 = time.time()
+    raw = _call_provider(provider, system_prompt, combined_text)
+    elapsed = time.time() - t0
+    print(f"done ({elapsed:.1f}s)")
+    return _parse_json_response(raw, context="reduce")
+
 
 def generate_summary(transcript_text: str, config: dict) -> dict:
     """
     Send the transcript to the configured chat provider and return the parsed JSON summary.
 
-    The transcript is truncated if it exceeds a reasonable character limit derived from
-    summary_max_tokens to avoid overwhelming smaller local models.
+    **Short transcripts** (≤ ``summary_max_input_tokens × 4`` characters) are sent in a
+    single pass.  **Long transcripts** are processed with a map-reduce strategy: the text is
+    split into non-overlapping chunks on newline boundaries, each chunk is summarised
+    independently (map), and all partial summaries are combined into one final structured
+    output (reduce).
+
+    An Ollama-specific warning is emitted when the transcript exceeds 32 K characters
+    (~8 K tokens) to remind users that Ollama's default context window is small.
 
     Args:
         transcript_text: Full text of _combined_transcript.txt
@@ -175,39 +384,52 @@ def generate_summary(transcript_text: str, config: dict) -> dict:
         Parsed summary dict matching the JSON schema defined in _build_system_prompt()
     """
     summary_max_tokens = int(config.get("summary_max_tokens", 2000))
-    system_prompt = _build_system_prompt(summary_max_tokens)
+    summary_max_input_tokens = int(config.get("summary_max_input_tokens", 32000))
+    max_input_chars = summary_max_input_tokens * 4  # 1 token ≈ 4 characters
 
-    # Rough heuristic: 1 token ≈ 4 characters. Allow ~16× the output budget for input.
-    max_input_chars = summary_max_tokens * 4 * 16
-    user_message = transcript_text
-    if len(transcript_text) > max_input_chars:
-        user_message = transcript_text[:max_input_chars] + _TRUNCATION_NOTICE
+    chat_provider_name = config.get("chat_provider", "ollama")
+    chat_label = f"{chat_provider_name} ({config.get('chat_model', 'llama3')})"
+
+    # Ollama context-window advisory
+    if chat_provider_name == "ollama" and len(transcript_text) > _OLLAMA_CONTEXT_WARN_CHARS:
         print(
-            f"  Warning: Transcript truncated to {max_input_chars} chars "
-            f"(original: {len(transcript_text)} chars)"
+            f"  Warning: Transcript is {len(transcript_text):,} chars "
+            f"(~{len(transcript_text) // 4:,} tokens). Ollama defaults to a small context "
+            f"window (often 4–8K tokens). If summaries are incomplete, add "
+            f"`PARAMETER num_ctx {summary_max_input_tokens}` to your Ollama model's Modelfile or "
+            f"use a cloud provider instead.",
+            file=sys.stderr,
         )
 
     provider = get_chat_provider(config)
-    chat_label = f"{config.get('chat_provider', 'ollama')} ({config.get('chat_model', 'llama3')})"
-    print(f"  Sending transcript to {chat_label}…")
 
-    raw = provider.chat(system_prompt, user_message)
+    # ------------------------------------------------------------------
+    # Single-pass path (transcript fits within the configured input limit)
+    # ------------------------------------------------------------------
+    if len(transcript_text) <= max_input_chars:
+        system_prompt = _build_system_prompt(summary_max_tokens)
+        print(f"  Sending transcript to {chat_label} (single pass)…", end=" ", flush=True)
+        t0 = time.time()
+        raw = _call_provider(provider, system_prompt, transcript_text)
+        print(f"done ({time.time() - t0:.1f}s)")
+        return _parse_json_response(raw, context="single pass")
 
-    # Strip accidental markdown fences that some models add despite instructions
-    raw = raw.strip()
-    if raw.startswith("```"):
-        raw = re.sub(r"^```[a-zA-Z]*\n?", "", raw)
-        raw = re.sub(r"\n?```$", "", raw)
-        raw = raw.strip()
+    # ------------------------------------------------------------------
+    # Map-reduce path (transcript is too long for a single call)
+    # ------------------------------------------------------------------
+    chunks = _chunk_transcript(transcript_text, max_input_chars)
+    print(
+        f"  Transcript ({len(transcript_text):,} chars) exceeds {max_input_chars:,}-char limit — "
+        f"using map-reduce over {len(chunks)} chunk(s)."
+    )
+    print(f"  Provider: {chat_label}")
 
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        print(f"  Error: LLM returned invalid JSON: {exc}", file=sys.stderr)
-        print(f"  Raw response (first 500 chars): {raw[:500]}", file=sys.stderr)
-        sys.exit(1)
+    partial_summaries = [
+        _map_chunk(chunk, idx, len(chunks), provider)
+        for idx, chunk in enumerate(chunks)
+    ]
 
-    return data
+    return _reduce_chunks(partial_summaries, provider, summary_max_tokens)
 
 
 # ---------------------------------------------------------------------------

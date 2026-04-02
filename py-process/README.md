@@ -360,6 +360,7 @@ Session: 20260330_143000_Campaign1_Session4
 |-----|---------|-------------|
 | `auto_summarize` | `true` | Run `summarize.py` automatically after vectorization in `process.py` |
 | `summary_max_tokens` | `2000` | Approximate token budget for the LLM summary output |
+| `summary_max_input_tokens` | `32000` | Max input tokens per summarization chunk; transcripts over this limit use map-reduce |
 | `chat_provider` | `ollama` | LLM backend for summarization: `ollama`, `openai`, or `anthropic` |
 | `chat_model` | `llama3.2` | Chat model name |
 
@@ -461,6 +462,7 @@ All configuration is in the root `config.yaml`. The fields relevant to `py-proce
 | `ollama_base_url` | `http://localhost:11434` | Ollama API URL |
 | `auto_summarize` | `true` | Automatically run `summarize.py` after vectorization in `process.py` |
 | `summary_max_tokens` | `2000` | Approximate token budget for the LLM when generating session summaries |
+| `summary_max_input_tokens` | `32000` | Max input tokens per summarization chunk; transcripts over this limit use map-reduce |
 
 ---
 
