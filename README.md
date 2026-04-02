@@ -255,7 +255,7 @@ pip install -r py-query/requirements.txt
 | `ollama_base_url` | `http://localhost:11434` | Ollama API base URL |
 | `query_api_host` | `0.0.0.0` | Host the RAG API server (`py-query/app.py`) binds to |
 | `query_api_port` | `8100` | Port the RAG API server listens on |
-| `auto_summarize` | `true` | Automatically generate session summaries after vectorization |
+| `auto_summarize` | `true` | Default state of the **☑ Generate Summary** toggle in the `/mlx-ai session` panel |
 | `summary_max_tokens` | `2000` | Approximate token budget for the LLM when generating session summaries |
 | `summary_max_input_tokens` | `32000` | Maximum input tokens per summarization chunk (adjust to your model's context window) |
 
@@ -353,7 +353,7 @@ Record ──► Transcribe ──► Merge Audio ──► Vectorize ──► 
 | **Transcribe** | `/mlx-ai session` → ⚙️ Post-Process or `python py-process/transcribe.py` | OpenAI Whisper |
 | **Merge Audio** | `/mlx-ai session` → ⚙️ Post-Process or `python py-process/merge_audio.py` | pydub + ffmpeg |
 | **Vectorize** | `/mlx-ai session` → ⚙️ Post-Process or `python py-process/vectorize.py` | ChromaDB + Ollama/OpenAI |
-| **Summarize** | Auto after vectorize (when `auto_summarize: true`) or `python py-process/summarize.py` | LLM (Ollama/OpenAI/Anthropic) |
+| **Summarize** | `/mlx-ai session` → ☑ Generate Summary toggle + ⚙️ Post-Process, or `python py-process/summarize.py` | LLM (Ollama/OpenAI/Anthropic) |
 | **Query** | `/mlx-ai ask` or `python py-query/query.py` | RAG (embed → retrieve → chat) |
 
 The **⚙️ Post-Process** button runs steps 2–5 automatically in sequence. Each step can also be run individually.

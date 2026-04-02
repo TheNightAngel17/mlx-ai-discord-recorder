@@ -257,6 +257,15 @@ client.on("interactionCreate", async (interaction) => {
     return;
   }
 
+  // ── Session panel — Generate Summary toggle ───────────────────────────────
+  if (
+    interaction.isButton() &&
+    interaction.customId.startsWith("panel_summary_toggle:")
+  ) {
+    await sessionPanel.handleSummaryToggle(interaction);
+    return;
+  }
+
   // ── Model select menu: post_process_model:<sessionName> ──────────────────
   if (interaction.isStringSelectMenu() && interaction.customId.startsWith("post_process_model:")) {
     const sessionName = interaction.customId.slice("post_process_model:".length);
@@ -329,7 +338,8 @@ client.on("interactionCreate", async (interaction) => {
       interaction,
       sessionName,
       model,
-      defaultLang
+      defaultLang,
+      config.auto_summarize !== false
     );
   }
 });

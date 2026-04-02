@@ -2,7 +2,7 @@
  * postProcessor.js — Spawns the Python post-processing orchestrator and reports results.
  *
  * Exports a PostProcessor class with:
- *   postProcess(interaction, sessionName, model, language) — run post-processing
+ *   postProcess(interaction, sessionName, model, language, silent, generateSummary) — run post-processing
  */
 
 "use strict";
@@ -40,8 +40,10 @@ class PostProcessor {
    * @param {string|null} language Language code or null for auto-detect
    * @param {boolean} [silent=false]  When true, suppresses announce-channel messages.
    *   Pass true when called from the session panel to avoid duplicate chat messages.
+   * @param {boolean} [generateSummary=true]  When true, passes --summarize to process.py.
+   *   When false, passes --no-summarize to skip session summary generation.
    */
-  async postProcess(interaction, sessionName, model, language, silent = false) {
+  async postProcess(interaction, sessionName, model, language, silent = false, generateSummary = true) {
     // Guard: only one post-processing run at a time
     if (this.isProcessing) {
       await interaction.reply({
@@ -103,6 +105,9 @@ class PostProcessor {
     const args = [scriptPath, sessionName, "--model", model];
     if (language) {
       args.push("--language", language);
+    }
+    if (!generateSummary) {
+      args.push("--no-summarize");
     }
 
     // Announce start (skipped when called silently from the session panel)
@@ -243,8 +248,9 @@ class PostProcessor {
    * @param {string} sessionName
    * @param {string} model
    * @param {string|null} language
+   * @param {boolean} [generateSummary=true]  When false, passes --no-summarize to process.py.
    */
-  async postProcessFromButton(interaction, sessionName, model, language) {
+  async postProcessFromButton(interaction, sessionName, model, language, generateSummary = true) {
     // Guard: only one post-processing run at a time
     if (this.isProcessing) {
       await interaction.followUp({
@@ -306,6 +312,9 @@ class PostProcessor {
     const args = [scriptPath, sessionName, "--model", model];
     if (language) {
       args.push("--language", language);
+    }
+    if (!generateSummary) {
+      args.push("--no-summarize");
     }
 
     const announceChannel = await this._getAnnounceChannel(interaction.guild);

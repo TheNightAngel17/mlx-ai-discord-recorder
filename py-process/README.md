@@ -124,7 +124,7 @@ python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}'); print(f'GP
 
 Runs all four processing steps in order for a single session. This is the script the JS bot calls when you press **⚙️ Post-Process** in the `/mlx-ai session` control panel.
 
-If any step fails, the pipeline halts immediately. Step 4 (summarize) can be disabled by setting `auto_summarize: false` in `config.yaml`.
+If any step fails, the pipeline halts immediately. Step 4 (summarize) is controlled by the **☑ Generate Summary** toggle in the session panel, which passes `--summarize` or `--no-summarize` to this script. You can also pass `--no-summarize` on the command line to skip it.
 
 #### Usage
 
@@ -137,6 +137,9 @@ python process.py <session_name> --model medium
 
 # Override model and language
 python process.py <session_name> --model large --language en
+
+# Skip summary generation
+python process.py <session_name> --no-summarize
 ```
 
 #### Terminal Example
@@ -156,6 +159,7 @@ python process.py 20260330_143000_Campaign1_Session4 --model medium --language e
 | `session` | ✅ | — | Session folder name |
 | `--model` | ❌ | From `config.yaml` | Whisper model: `tiny`, `base`, `small`, `medium`, `large` |
 | `--language` | ❌ | From `config.yaml` | Language code (e.g. `en`). Omit for auto-detect. |
+| `--no-summarize` | ❌ | Summarize is on by default | Pass to skip Step 4 (session summary generation) |
 
 ---
 
@@ -358,7 +362,7 @@ Session: 20260330_143000_Campaign1_Session4
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `auto_summarize` | `true` | Run `summarize.py` automatically after vectorization in `process.py` |
+| `auto_summarize` | `true` | Default state of the **☑ Generate Summary** toggle in the `/mlx-ai session` panel |
 | `summary_max_tokens` | `2000` | Approximate token budget for the LLM summary output |
 | `summary_max_input_tokens` | `32000` | Max input tokens per summarization chunk; transcripts over this limit use map-reduce |
 | `chat_provider` | `ollama` | LLM backend for summarization: `ollama`, `openai`, or `anthropic` |
@@ -460,7 +464,7 @@ All configuration is in the root `config.yaml`. The fields relevant to `py-proce
 | `chat_provider` | `ollama` | Chat LLM backend: `ollama`, `openai`, or `anthropic` |
 | `chat_model` | `llama3.2` | Chat model name (used by `summarize.py`) |
 | `ollama_base_url` | `http://localhost:11434` | Ollama API URL |
-| `auto_summarize` | `true` | Automatically run `summarize.py` after vectorization in `process.py` |
+| `auto_summarize` | `true` | Default state of the **☑ Generate Summary** toggle in the `/mlx-ai session` panel |
 | `summary_max_tokens` | `2000` | Approximate token budget for the LLM when generating session summaries |
 | `summary_max_input_tokens` | `32000` | Max input tokens per summarization chunk; transcripts over this limit use map-reduce |
 

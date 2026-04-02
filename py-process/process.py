@@ -7,32 +7,21 @@ It coordinates all post-processing steps in order:
     1. Transcription (via transcribe.py)
     2. Merge audio (via merge_audio.py)
     3. Vectorize transcript (via vectorize.py)
-    4. Summarize session (via summarize.py) — only when auto_summarize: true in config.yaml
+    4. Summarize session (via summarize.py) — only when --summarize is passed
 
 Usage:
-    python process.py <session_name> [--model <size>] [--language <lang>]
+    python process.py <session_name> [--model <size>] [--language <lang>] [--no-summarize]
 
 Examples:
     python process.py 20260330_033020_test
     python process.py 20260330_033020_test --model medium --language en
+    python process.py 20260330_033020_test --no-summarize
 """
 
 import argparse
 import subprocess
 import sys
 from pathlib import Path
-
-import yaml
-
-
-def load_config() -> dict:
-    """Load config.yaml from the repo root (one level up from py-process/)."""
-    config_path = Path(__file__).resolve().parent.parent / "config.yaml"
-    if not config_path.exists():
-        print(f"Warning: config.yaml not found at {config_path}", file=sys.stderr)
-        return {}
-    with open(config_path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f) or {}
 
 
 def run_step(label: str, command: list[str]) -> None:
@@ -67,9 +56,14 @@ def main():
         default=None,
         help="Language code (e.g. 'en'). If omitted, uses config.yaml default or auto-detects.",
     )
+    parser.add_argument(
+        "--summarize",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Generate a session summary after vectorization (default: on). "
+             "Pass --no-summarize to skip.",
+    )
     args = parser.parse_args()
-
-    config = load_config()
 
     # Resolve paths to sibling scripts (same directory as this script)
     script_dir = Path(__file__).resolve().parent
@@ -102,15 +96,14 @@ def main():
     run_step("Vectorize transcript", vectorize_cmd)
 
     # -------------------------------------------------------------------
-    # Step 4: Summarize session (optional — gated on auto_summarize config)
+    # Step 4: Summarize session (optional — controlled by --summarize flag)
     # -------------------------------------------------------------------
-    auto_summarize = config.get("auto_summarize", True)
-    if auto_summarize:
+    if args.summarize:
         summarize_cmd = [sys.executable, str(summarize_script), args.session]
         run_step("Generate session summary", summarize_cmd)
     else:
         print(f"\n{'=' * 60}")
-        print("  Step: Generate session summary — SKIPPED (auto_summarize: false)")
+        print("  Step: Generate session summary — SKIPPED (--no-summarize)")
         print(f"{'=' * 60}\n")
 
     print(f"\n{'=' * 60}")
