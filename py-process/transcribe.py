@@ -195,6 +195,18 @@ def main():
     all_segments = []
     for username, result in results_by_user.items():
         join_offset_s = metadata_by_user[username]["audio_start_offset_ms"] / 1000.0
+
+        # Insert a join-event marker so the transcript records exactly when
+        # each participant entered the session.
+        all_segments.append(
+            {
+                "username": username,
+                "start": join_offset_s,
+                "end": join_offset_s,
+                "text": "*** joined the session ***",
+            }
+        )
+
         for seg in result.get("segments", []):
             # Clamp timestamps to the user's authoritative join time so that
             # Whisper timing drift never places speech before the user joined.
@@ -215,6 +227,8 @@ def main():
 
     # Sort chronologically: primary key is end time, secondary key is start time.
     # This handles overlapping segments from multiple speakers correctly.
+    # Join markers have end == start, so they sort before any speech at the same
+    # timestamp (secondary sort keeps them stable relative to each other).
     all_segments.sort(key=lambda s: (s["end"], s["start"]))
 
     combined_path = session_dir / "_combined_transcript.txt"
