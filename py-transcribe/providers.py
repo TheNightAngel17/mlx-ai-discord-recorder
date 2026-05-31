@@ -48,9 +48,11 @@ class OpenAIWhisperTranscriber(TranscriptionProvider):
         import whisper  # lazy import — only when this backend is selected
 
         self.model_name = model_name
-        self.device = device or "cpu"
-        # device=None lets Whisper auto-select (CUDA if available).
-        self._model = whisper.load_model(model_name, device=device or None)
+        # openai-whisper does not understand "auto" — let Whisper auto-select
+        # (CUDA if available) by passing None in that case.
+        resolved_device = None if (not device or device == "auto") else device
+        self.device = resolved_device or "cpu"
+        self._model = whisper.load_model(model_name, device=resolved_device)
 
     def transcribe(self, wav_path: str, language: str | None) -> list[dict]:
         options: dict = {"word_timestamps": True}
