@@ -1,0 +1,67 @@
+# config.docker.yaml — Docker/Compose overlay of config.yaml.
+#
+# docker-compose bind-mounts this file over /app/config.yaml in every service.
+# It is a COMPLETE config (it fully replaces config.yaml in the containers); only
+# the deployment-specific values differ from the repo-root config.yaml:
+#   - data paths point at the shared volumes (/data/...)
+#   - service URLs use Compose service names instead of localhost
+# Secrets (DISCORD_TOKEN, GUILD_ID, *_API_KEY) come from .env via env_file.
+#
+# Keep the non-deployment settings (providers, models, tuning) in sync with
+# config.yaml, or edit them here for the containerized stack specifically.
+
+# --- Shared data volumes (mounted at identical paths in every container) ---
+output_directory: /data/recordings
+vector_db_directory: /data/vectordb
+
+# --- Recording / announcements ---
+announce_channel: "bot-commands"
+mp3_bitrate: "128k"
+keep_wav: true
+snippet_silence_ms: 1000
+snippet_tail_pad_ms: 200
+
+# --- Whisper defaults (batch fallback / shared language) ---
+whisper_model: "base"
+whisper_language: "en"
+
+# --- Live transcription service (py-transcribe) ---
+auto_transcribe: true
+transcribe_api_host: 0.0.0.0
+transcribe_api_port: 8200
+transcribe_provider: faster-whisper
+transcribe_model: base
+transcribe_device: cuda
+transcribe_compute_type: float16
+transcribe_min_ms: 400
+transcribe_api_url: http://py-transcribe:8200
+
+# --- Post-processing job service (py-process) ---
+process_api_host: 0.0.0.0
+process_api_port: 8300
+process_api_url: http://py-process:8300
+
+# --- Vectorization / RAG ---
+chunk_minutes: 3
+
+# Embedding provider (must match what indexed the sessions)
+embedding_provider: voyage
+embedding_model: voyage-3-large
+
+# Chat provider
+chat_provider: anthropic
+chat_model: claude-sonnet-4-6
+
+# Ollama (used only when a provider above is set to "ollama"). Points at the
+# optional `ollama` Compose service (enable with `--profile ollama`).
+ollama_base_url: http://ollama:11434
+
+# --- RAG query API (py-query) ---
+query_api_host: 0.0.0.0
+query_api_port: 8100
+query_api_url: http://py-query:8100
+
+# --- Session summaries ---
+auto_summarize: true
+summary_max_tokens: 2000
+summary_max_input_tokens: 32000

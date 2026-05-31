@@ -29,6 +29,11 @@ Usage:
     python transcribe.py <session_name> [--model <size>] [--language <lang>]
 """
 
+# Annotations are lazy strings so we can reference whisper types in signatures
+# without importing the (heavy) whisper package at module load — it is imported
+# only when a snippet actually needs batch transcription (see main()).
+from __future__ import annotations
+
 import argparse
 import json
 import sys
@@ -37,7 +42,6 @@ import wave
 from pathlib import Path
 
 import yaml
-import whisper
 
 
 def load_config() -> dict:
@@ -268,10 +272,20 @@ def main():
 
     model = None
     if needs_model:
-        print(f"Loading Whisper model '{model_size}' (snippets without sidecars)...")
-        t0 = time.time()
-        model = whisper.load_model(model_size)
-        print(f"Model loaded in {time.time() - t0:.1f}s\n")
+        try:
+            import whisper  # heavy (pulls torch) — only imported when truly needed
+        except ImportError:
+            print(
+                "Warning: openai-whisper is not installed; snippets without a "
+                "transcription sidecar will be skipped. Live transcription via "
+                "py-transcribe normally produces a sidecar for every snippet.\n",
+                file=sys.stderr,
+            )
+        else:
+            print(f"Loading Whisper model '{model_size}' (snippets without sidecars)...")
+            t0 = time.time()
+            model = whisper.load_model(model_size)
+            print(f"Model loaded in {time.time() - t0:.1f}s\n")
     else:
         print("All snippets already transcribed (sidecars present) — assembling without Whisper.\n")
 

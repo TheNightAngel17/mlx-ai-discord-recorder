@@ -2,6 +2,8 @@
 
 A persistent HTTP API and CLI tool for asking natural-language questions about your recorded and vectorized D&D sessions. Built with FastAPI; ChromaDB and LLM providers are loaded once at startup to eliminate cold-start latency.
 
+> 🐳 **Docker:** runs as the `py-query` service. See [DOCKER.md](../DOCKER.md).
+
 > **↩️ Back to [main README](../README.md)** | See also: [js-bot](../js-bot/README.md) · [py-process](../py-process/README.md)
 
 ---

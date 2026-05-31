@@ -1,5 +1,7 @@
 # py-transcribe — Live Transcription Service
 
+> 🐳 **Docker:** runs as the GPU `py-transcribe` service (CUDA + faster-whisper). See [DOCKER.md](../DOCKER.md).
+
 An always-on FastAPI service that loads a single Whisper model **once** and keeps
 it warm, transcribing utterance snippets **as they are recorded** instead of in
 one cold-start batch after the session ends.

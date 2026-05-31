@@ -1,0 +1,29 @@
+# Keep build contexts small and free of secrets / local state.
+.git
+.github
+.claude
+.venv
+venv
+env
+
+# Node
+**/node_modules
+
+# Python bytecode
+**/__pycache__
+*.pyc
+*.pyo
+*.pyd
+
+# Local data (must come from mounted volumes, never baked into images)
+recordings/
+vectordb/
+
+# Secrets — provided at runtime via env_file, never copied into images
+.env
+
+# Editor / OS
+.vscode
+.idea
+*.swp
+.DS_Store

@@ -2,6 +2,8 @@
 
 The Python audio processing pipeline that handles transcription, audio merging, vector embedding, and session summarization for recorded Discord sessions.
 
+> 🐳 **Docker:** this runs as the `py-process` service — a FastAPI job runner (`app.py`) the bot triggers over HTTP, wrapping the same CLIs documented below. See [DOCKER.md](../DOCKER.md).
+
 > **↩️ Back to [main README](../README.md)** | See also: [js-bot](../js-bot/README.md) · [py-query](../py-query/README.md)
 
 ---

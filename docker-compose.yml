@@ -1,0 +1,134 @@
+# docker-compose.yml — full MLX AI Discord Recorder stack.
+#
+#   cp .env.example .env   # fill in DISCORD_TOKEN, GUILD_ID, and any API keys
+#   docker compose build
+#   docker compose up -d                 # bot + py-process + py-query + py-transcribe
+#   docker compose --profile ollama up   # also start a local Ollama
+#
+# Shared state lives in two named volumes mounted at IDENTICAL paths everywhere:
+#   recordings -> /data/recordings   (bot writes WAVs; py-transcribe writes sidecars; py-process reads/writes)
+#   vectordb   -> /data/vectordb     (py-process writes ChromaDB; py-query reads)
+# The identical mount path matters: the recorder hands py-transcribe an absolute
+# wav_path, so that path must resolve the same in both containers.
+
+x-config-mount: &config-mount
+  type: bind
+  source: ./deploy/config.docker.yaml
+  target: /app/config.yaml
+  read_only: true
+
+services:
+  bot:
+    build:
+      context: .
+      dockerfile: js-bot/Dockerfile
+    image: mlx-ai/bot
+    restart: unless-stopped
+    env_file: ./.env
+    volumes:
+      - { <<: *config-mount }
+      - recordings:/data/recordings
+    depends_on:
+      py-process:
+        condition: service_healthy
+      py-query:
+        condition: service_healthy
+      # py-transcribe is reached fire-and-forget; the bot does not block on it.
+    networks: [mlx]
+
+  py-process:
+    build:
+      context: .
+      dockerfile: py-process/Dockerfile
+    image: mlx-ai/py-process
+    restart: unless-stopped
+    env_file: ./.env
+    volumes:
+      - { <<: *config-mount }
+      - recordings:/data/recordings
+      - vectordb:/data/vectordb
+    ports:
+      - "127.0.0.1:8300:8300"   # optional host access (debugging)
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8300/api/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    networks: [mlx]
+
+  py-query:
+    build:
+      context: .
+      dockerfile: py-query/Dockerfile
+    image: mlx-ai/py-query
+    restart: unless-stopped
+    env_file: ./.env
+    volumes:
+      - { <<: *config-mount }
+      - vectordb:/data/vectordb
+    ports:
+      - "127.0.0.1:8100:8100"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8100/api/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    networks: [mlx]
+
+  py-transcribe:
+    build:
+      context: .
+      dockerfile: py-transcribe/Dockerfile
+    image: mlx-ai/py-transcribe
+    restart: unless-stopped
+    env_file: ./.env
+    volumes:
+      - { <<: *config-mount }
+      - recordings:/data/recordings
+      - whisper-cache:/data/model-cache
+    ports:
+      - "127.0.0.1:8200:8200"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8200/api/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 180s   # first run downloads + loads the model
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    networks: [mlx]
+
+  # Optional local LLM — enable with: docker compose --profile ollama up
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["ollama"]
+    restart: unless-stopped
+    volumes:
+      - ollama-models:/root/.ollama
+    ports:
+      - "127.0.0.1:11434:11434"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    networks: [mlx]
+
+volumes:
+  recordings:
+  vectordb:
+  whisper-cache:
+  ollama-models:
+
+networks:
+  mlx:
+    driver: bridge

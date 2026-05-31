@@ -1,22 +1,34 @@
 /**
- * postProcessor.js — Spawns the Python post-processing orchestrator and reports results.
+ * postProcessor.js — Triggers the py-process job-runner service and reports results.
+ *
+ * The bot no longer spawns Python directly. It POSTs a job to the py-process
+ * FastAPI service (transcribe → merge → vectorize → summarize), polls the job
+ * for progress, and reads the result files (combined transcript, summary) from
+ * the shared recordings volume to post back to Discord.
  *
  * Exports a PostProcessor class with:
- *   postProcess(interaction, sessionName, model, language, silent, generateSummary) — run post-processing
+ *   postProcess(interaction, sessionName, model, language, silent, generateSummary)
+ *   postProcessFromButton(interaction, sessionName, model, language, generateSummary)
+ *   mergeAudio(interaction, sessionName)
+ *   vectorize(interaction, sessionName, force)
+ *   status / mergeAudioStatus / vectorizeStatus
  */
 
 "use strict";
 
 const { AttachmentBuilder } = require("discord.js");
-const { spawn } = require("child_process");
 const path = require("path");
 const fs = require("fs");
+
+const POLL_INTERVAL_MS = 3000; // how often to poll job status
+const JOB_TIMEOUT_MS = 60 * 60 * 1000; // 1h safety cap on a single job
+const HTTP_TIMEOUT_MS = 15000; // per-request timeout for service calls
 
 /**
  * Count per-user snippet WAVs across a session's participant sub-folders.
  *
- * Recordings now live as timestamped snippets in <session>/<username>/*.wav,
- * so a flat readdir of the session folder no longer sees them. Reserved
+ * Recordings live as timestamped snippets in <session>/<username>/*.wav, so a
+ * flat readdir of the session folder no longer sees them. Reserved
  * underscore/dot-prefixed entries (session metadata, mix outputs) are ignored.
  *
  * @param {string} sessionDir
@@ -54,27 +66,125 @@ class PostProcessor {
     this.logger = logger;
     this.isProcessing = false;
     this.currentSession = null;
-    this.currentProcess = null;
     this.isMerging = false;
     this.mergeSession = null;
     this.isVectorizing = false;
     this.vectorizeSession = null;
+
+    const port = Number(config.process_api_port) || 8300;
+    // Connect URL: localhost for bare-metal, service name in Docker (config-set).
+    this._baseUrl = (config.process_api_url || `http://localhost:${port}`).replace(/\/$/, "");
+  }
+
+  // ---------------------------------------------------------------------------
+  // Service client helpers
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Start a job on the py-process service. Resolves to the job id.
+   * Throws if the service is unreachable or rejects the request.
+   *
+   * @param {"process"|"merge"|"vectorize"} kind
+   * @param {object} body
+   * @returns {Promise<string>}
+   */
+  async _startJob(kind, body) {
+    const res = await fetch(`${this._baseUrl}/api/${kind}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+    });
+    if (!res.ok) {
+      let detail = `HTTP ${res.status}`;
+      try {
+        const j = await res.json();
+        detail = j.detail || detail;
+      } catch {
+        /* non-JSON error body */
+      }
+      throw new Error(detail);
+    }
+    const data = await res.json();
+    return data.job_id;
   }
 
   /**
-   * Run the Python post-processing script for a given session.
+   * Poll a job until it reaches a terminal state. Calls onStep(job) whenever the
+   * reported step changes, so the caller can surface progress in Discord.
+   * Transient poll failures are tolerated; resolves with the final job object.
+   *
+   * @param {string} jobId
+   * @param {(job: object) => Promise<void>} [onStep]
+   * @returns {Promise<object>}
+   */
+  async _pollJob(jobId, onStep) {
+    const deadline = Date.now() + JOB_TIMEOUT_MS;
+    let lastStep = null;
+
+    while (Date.now() < deadline) {
+      let job = null;
+      try {
+        const res = await fetch(`${this._baseUrl}/api/jobs/${jobId}`, {
+          signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+        });
+        if (res.ok) job = await res.json();
+      } catch {
+        /* transient — keep polling */
+      }
+
+      if (job) {
+        if (onStep && job.step && job.step !== lastStep) {
+          lastStep = job.step;
+          try {
+            await onStep(job);
+          } catch {
+            /* ignore Discord edit hiccups */
+          }
+        }
+        if (job.status === "done" || job.status === "failed") return job;
+      }
+
+      await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+    }
+    throw new Error("Timed out waiting for the job to finish.");
+  }
+
+  /** Extract a Discord-safe error blurb from a failed job. */
+  _jobErrorText(job) {
+    const tail = (job.log_tail || []).slice(-15).join("\n");
+    return (tail || job.error || "Unknown error").slice(0, 1500);
+  }
+
+  /** Read a truncated preview of the combined transcript from the shared volume. */
+  _readCombinedPreview(sessionDir) {
+    const combinedPath = path.join(sessionDir, "_combined_transcript.txt");
+    if (!fs.existsSync(combinedPath)) return "";
+    const content = fs.readFileSync(combinedPath, "utf-8");
+    return content.length > 1800 ? content.slice(0, 1800) + "\n… (truncated)" : content;
+  }
+
+  /** "py-process unreachable" hint shown when a job can't be started. */
+  _serviceHint() {
+    const port = this.config.process_api_port || 8300;
+    return `> Is the py-process service running? \`cd py-process && uvicorn app:app --host 0.0.0.0 --port ${port}\``;
+  }
+
+  // ---------------------------------------------------------------------------
+  // process (full pipeline)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Run the full post-processing pipeline for a session.
    *
    * @param {import('discord.js').ChatInputCommandInteraction} interaction
    * @param {string} sessionName
-   * @param {string} model        Whisper model size (tiny|base|small|medium|large)
-   * @param {string|null} language Language code or null for auto-detect
-   * @param {boolean} [silent=false]  When true, suppresses announce-channel messages.
-   *   Pass true when called from the session panel to avoid duplicate chat messages.
-   * @param {boolean} [generateSummary=true]  When true, passes --summarize to process.py.
-   *   When false, passes --no-summarize to skip session summary generation.
+   * @param {string} model
+   * @param {string|null} language
+   * @param {boolean} [silent=false]
+   * @param {boolean} [generateSummary=true]
    */
   async postProcess(interaction, sessionName, model, language, silent = false, generateSummary = true) {
-    // Guard: only one post-processing run at a time
     if (this.isProcessing) {
       await interaction.reply({
         content: `Post-processing is already in progress for session \`${this.currentSession}\`. Please wait for it to finish.`,
@@ -83,7 +193,6 @@ class PostProcessor {
       return;
     }
 
-    // Validate session directory exists
     const outputDir = this.config.output_directory || "./recordings";
     const sessionDir = path.resolve(outputDir, sessionName);
 
@@ -95,7 +204,6 @@ class PostProcessor {
       return;
     }
 
-    // Check for snippet recordings (per-user sub-folders of timestamped WAVs)
     const snippetCount = countSnippetWavs(sessionDir);
     if (snippetCount === 0) {
       await interaction.reply({
@@ -105,40 +213,14 @@ class PostProcessor {
       return;
     }
 
-    // Defer — post-processing can take a while
     await interaction.deferReply();
 
     this.isProcessing = true;
     this.currentSession = sessionName;
-
     this.logger.info(
       `Post-processing started: session=${sessionName}, model=${model}, language=${language || "auto"}, snippets=${snippetCount}`
     );
 
-    // Resolve paths
-    const repoRoot = path.resolve(__dirname, "..");
-    const scriptPath = path.join(repoRoot, "py-process", "process.py");
-
-    // Find the Python executable — prefer the venv, fall back to system python
-    const venvPython = path.join(repoRoot, ".venv", "Scripts", "python.exe");
-    const venvPythonUnix = path.join(repoRoot, ".venv", "bin", "python");
-    let pythonExe = "python";
-    if (fs.existsSync(venvPython)) {
-      pythonExe = venvPython;
-    } else if (fs.existsSync(venvPythonUnix)) {
-      pythonExe = venvPythonUnix;
-    }
-
-    // Build args
-    const args = [scriptPath, sessionName, "--model", model];
-    if (language) {
-      args.push("--language", language);
-    }
-    if (!generateSummary) {
-      args.push("--no-summarize");
-    }
-
-    // Announce start (skipped when called silently from the session panel)
     const announceChannel = await this._getAnnounceChannel(interaction.guild);
     if (announceChannel && !silent) {
       await announceChannel.send(
@@ -146,127 +228,70 @@ class PostProcessor {
       );
     }
 
-    return new Promise((resolve) => {
-      const proc = spawn(pythonExe, args, { cwd: repoRoot });
-      this.currentProcess = proc;
-
-      let stdout = "";
-      let stderr = "";
-
-      proc.stdout.on("data", (data) => {
-        const line = data.toString();
-        stdout += line;
-        // Log each line for real-time visibility in the terminal
-        for (const l of line.split("\n").filter((s) => s.trim())) {
-          this.logger.info(`[process] ${l}`);
-        }
+    try {
+      const jobId = await this._startJob("process", {
+        session: sessionName,
+        model,
+        language: language || null,
+        summarize: generateSummary,
       });
 
-      proc.stderr.on("data", (data) => {
-        stderr += data.toString();
+      const job = await this._pollJob(jobId, async (j) => {
+        await interaction.editReply({ content: `⏳ Post-processing \`${sessionName}\` — ${j.step}…` });
       });
 
-      proc.on("close", async (code) => {
-        this.isProcessing = false;
-        this.currentSession = null;
-        this.currentProcess = null;
+      if (job.status === "done") {
+        this.logger.info(`Post-processing finished successfully for session ${sessionName}`);
 
-        if (code === 0) {
-          this.logger.info(
-            `Post-processing finished successfully for session ${sessionName}`
+        const preview = this._readCombinedPreview(sessionDir);
+        const replyContent = [
+          `✅ Post-processing complete for session \`${sessionName}\``,
+          `Files saved to \`${sessionDir}\``,
+        ];
+        if (preview) replyContent.push("", "```", preview, "```");
+        await interaction.editReply({ content: replyContent.join("\n") });
+
+        if (announceChannel && !silent) {
+          await announceChannel.send(
+            `✅ Post-processing complete for session \`${sessionName}\` — files saved to \`${sessionDir}\``
           );
-
-          // Read the combined transcript (if it exists) for the reply
-          const combinedPath = path.join(
-            sessionDir,
-            "_combined_transcript.txt"
-          );
-          let preview = "";
-          if (fs.existsSync(combinedPath)) {
-            const content = fs.readFileSync(combinedPath, "utf-8");
-            // Show first ~1800 chars to stay within Discord's 2000 char limit
-            if (content.length > 1800) {
-              preview = content.slice(0, 1800) + "\n… (truncated)";
-            } else {
-              preview = content;
-            }
-          }
-
-          const replyContent = [
-            `✅ Post-processing complete for session \`${sessionName}\``,
-            `Files saved to \`${sessionDir}\``,
-          ];
-
-          if (preview) {
-            replyContent.push("", "```", preview, "```");
-          }
-
-          await interaction.editReply({
-            content: replyContent.join("\n"),
-          });
-
-          if (announceChannel && !silent) {
-            await announceChannel.send(
-              `✅ Post-processing complete for session \`${sessionName}\` — files saved to \`${sessionDir}\``
-            );
-
-            // Post session summary to the announce channel if it was generated
-            const summaryPath = path.join(sessionDir, "_session_summary.md");
-            if (fs.existsSync(summaryPath)) {
-              await announceChannel.send({
-                files: [new AttachmentBuilder(summaryPath, { name: `${sessionName}_summary.md` })],
-              });
-            }
-          }
-        } else {
-          this.logger.error(
-            `Post-processing failed for session ${sessionName} (exit code ${code}): ${stderr}`
-          );
-
-          await interaction.editReply({
-            content: `❌ Post-processing failed for session \`${sessionName}\`.\n\`\`\`\n${stderr.slice(0, 1500) || "Unknown error"}\n\`\`\``,
-          });
-
-          if (announceChannel && !silent) {
-            await announceChannel.send(
-              `❌ Post-processing failed for session \`${sessionName}\``
-            );
+          const summaryPath = path.join(sessionDir, "_session_summary.md");
+          if (fs.existsSync(summaryPath)) {
+            await announceChannel.send({
+              files: [new AttachmentBuilder(summaryPath, { name: `${sessionName}_summary.md` })],
+            });
           }
         }
-
-        resolve();
-      });
-
-      proc.on("error", async (err) => {
-        this.isProcessing = false;
-        this.currentSession = null;
-        this.currentProcess = null;
-
-        this.logger.error(
-          `Failed to spawn post-processing process: ${err.message}`
-        );
-
+      } else {
+        this.logger.error(`Post-processing failed for session ${sessionName}: ${this._jobErrorText(job)}`);
         await interaction.editReply({
-          content: `❌ Failed to start post-processing: ${err.message}`,
+          content: `❌ Post-processing failed for session \`${sessionName}\`.\n\`\`\`\n${this._jobErrorText(job)}\n\`\`\``,
         });
-
-        resolve();
+        if (announceChannel && !silent) {
+          await announceChannel.send(`❌ Post-processing failed for session \`${sessionName}\``);
+        }
+      }
+    } catch (err) {
+      this.logger.error(`Could not run post-processing for ${sessionName}: ${err.message}`);
+      await interaction.editReply({
+        content: `❌ Could not run post-processing: ${err.message}\n${this._serviceHint()}`,
       });
-    });
+    } finally {
+      this.isProcessing = false;
+      this.currentSession = null;
+    }
   }
 
   /**
-   * Run post-processing triggered by a button click.
-   * The button has already been acknowledged (update) by the caller.
+   * Run post-processing triggered by a button click (already acknowledged).
    *
    * @param {import('discord.js').ButtonInteraction} interaction
    * @param {string} sessionName
    * @param {string} model
    * @param {string|null} language
-   * @param {boolean} [generateSummary=true]  When false, passes --no-summarize to process.py.
+   * @param {boolean} [generateSummary=true]
    */
   async postProcessFromButton(interaction, sessionName, model, language, generateSummary = true) {
-    // Guard: only one post-processing run at a time
     if (this.isProcessing) {
       await interaction.followUp({
         content: `⚠️ Post-processing is already in progress for session \`${this.currentSession}\`. Please wait for it to finish.`,
@@ -275,7 +300,6 @@ class PostProcessor {
       return;
     }
 
-    // Validate session directory exists
     const outputDir = this.config.output_directory || "./recordings";
     const sessionDir = path.resolve(outputDir, sessionName);
 
@@ -287,7 +311,6 @@ class PostProcessor {
       return;
     }
 
-    // Check for snippet recordings (per-user sub-folders of timestamped WAVs)
     const snippetCount = countSnippetWavs(sessionDir);
     if (snippetCount === 0) {
       await interaction.followUp({
@@ -297,128 +320,64 @@ class PostProcessor {
       return;
     }
 
-    // Send a "starting" message to the channel so progress is visible
     const startMsg = await interaction.followUp({
       content: `⏳ Post-processing started for session \`${sessionName}\` (model: ${model}, language: ${language || "auto-detect"}, ${snippetCount} snippet(s))…`,
     });
 
     this.isProcessing = true;
     this.currentSession = sessionName;
-
     this.logger.info(
       `Post-processing started (button): session=${sessionName}, model=${model}, language=${language || "auto"}, snippets=${snippetCount}`
     );
 
-    // Resolve paths
-    const repoRoot = path.resolve(__dirname, "..");
-    const scriptPath = path.join(repoRoot, "py-process", "process.py");
-
-    const venvPython = path.join(repoRoot, ".venv", "Scripts", "python.exe");
-    const venvPythonUnix = path.join(repoRoot, ".venv", "bin", "python");
-    let pythonExe = "python";
-    if (fs.existsSync(venvPython)) {
-      pythonExe = venvPython;
-    } else if (fs.existsSync(venvPythonUnix)) {
-      pythonExe = venvPythonUnix;
-    }
-
-    const args = [scriptPath, sessionName, "--model", model];
-    if (language) {
-      args.push("--language", language);
-    }
-    if (!generateSummary) {
-      args.push("--no-summarize");
-    }
-
     const announceChannel = await this._getAnnounceChannel(interaction.guild);
 
-    return new Promise((resolve) => {
-      const proc = spawn(pythonExe, args, { cwd: repoRoot });
-      this.currentProcess = proc;
+    try {
+      const jobId = await this._startJob("process", {
+        session: sessionName,
+        model,
+        language: language || null,
+        summarize: generateSummary,
+      });
 
-      let stdout = "";
-      let stderr = "";
+      const job = await this._pollJob(jobId, async (j) => {
+        await startMsg.edit({ content: `⏳ Post-processing \`${sessionName}\` — ${j.step}…` });
+      });
 
-      proc.stdout.on("data", (data) => {
-        const line = data.toString();
-        stdout += line;
-        for (const l of line.split("\n").filter((s) => s.trim())) {
-          this.logger.info(`[process] ${l}`);
+      if (job.status === "done") {
+        this.logger.info(`Post-processing finished successfully for session ${sessionName}`);
+
+        const preview = this._readCombinedPreview(sessionDir);
+        const replyParts = [
+          `✅ Post-processing complete for session \`${sessionName}\``,
+          `Files saved to \`${sessionDir}\``,
+        ];
+        if (preview) replyParts.push("", "```", preview, "```");
+        await startMsg.edit({ content: replyParts.join("\n") });
+
+        if (announceChannel) {
+          const summaryPath = path.join(sessionDir, "_session_summary.md");
+          if (fs.existsSync(summaryPath)) {
+            await announceChannel.send({
+              files: [new AttachmentBuilder(summaryPath, { name: `${sessionName}_summary.md` })],
+            });
+          }
         }
-      });
-
-      proc.stderr.on("data", (data) => {
-        stderr += data.toString();
-      });
-
-      proc.on("close", async (code) => {
-        this.isProcessing = false;
-        this.currentSession = null;
-        this.currentProcess = null;
-
-        if (code === 0) {
-          this.logger.info(
-            `Post-processing finished successfully for session ${sessionName}`
-          );
-
-          const combinedPath = path.join(sessionDir, "_combined_transcript.txt");
-          let preview = "";
-          if (fs.existsSync(combinedPath)) {
-            const content = fs.readFileSync(combinedPath, "utf-8");
-            preview =
-              content.length > 1800
-                ? content.slice(0, 1800) + "\n… (truncated)"
-                : content;
-          }
-
-          const replyParts = [
-            `✅ Post-processing complete for session \`${sessionName}\``,
-            `Files saved to \`${sessionDir}\``,
-          ];
-          if (preview) {
-            replyParts.push("", "```", preview, "```");
-          }
-
-          await startMsg.edit({ content: replyParts.join("\n") });
-
-          // Post session summary to the announce channel if it was generated
-          if (announceChannel) {
-            const summaryPath = path.join(sessionDir, "_session_summary.md");
-            if (fs.existsSync(summaryPath)) {
-              await announceChannel.send({
-                files: [new AttachmentBuilder(summaryPath, { name: `${sessionName}_summary.md` })],
-              });
-            }
-          }
-        } else {
-          this.logger.error(
-            `Post-processing failed for session ${sessionName} (exit code ${code}): ${stderr}`
-          );
-
-          await startMsg.edit({
-            content: `❌ Post-processing failed for session \`${sessionName}\`.\n\`\`\`\n${stderr.slice(0, 1500) || "Unknown error"}\n\`\`\``,
-          });
-        }
-
-        resolve();
-      });
-
-      proc.on("error", async (err) => {
-        this.isProcessing = false;
-        this.currentSession = null;
-        this.currentProcess = null;
-
-        this.logger.error(
-          `Failed to spawn post-processing process: ${err.message}`
-        );
-
+      } else {
+        this.logger.error(`Post-processing failed for session ${sessionName}: ${this._jobErrorText(job)}`);
         await startMsg.edit({
-          content: `❌ Failed to start post-processing: ${err.message}`,
+          content: `❌ Post-processing failed for session \`${sessionName}\`.\n\`\`\`\n${this._jobErrorText(job)}\n\`\`\``,
         });
-
-        resolve();
+      }
+    } catch (err) {
+      this.logger.error(`Could not run post-processing for ${sessionName}: ${err.message}`);
+      await startMsg.edit({
+        content: `❌ Could not run post-processing: ${err.message}\n${this._serviceHint()}`,
       });
-    });
+    } finally {
+      this.isProcessing = false;
+      this.currentSession = null;
+    }
   }
 
   /**
@@ -428,13 +387,9 @@ class PostProcessor {
    */
   async status(interaction) {
     if (!this.isProcessing) {
-      await interaction.reply({
-        content: "No post-processing in progress.",
-        ephemeral: true,
-      });
+      await interaction.reply({ content: "No post-processing in progress.", ephemeral: true });
       return;
     }
-
     await interaction.reply({
       content: `Post-processing in progress for session \`${this.currentSession}\`…`,
       ephemeral: true,
@@ -446,7 +401,7 @@ class PostProcessor {
   // ---------------------------------------------------------------------------
 
   /**
-   * Spawn merge_audio.py for a given session.
+   * Trigger an audio merge job for a session.
    *
    * @param {import('discord.js').ChatInputCommandInteraction} interaction
    * @param {string} sessionName
@@ -484,68 +439,35 @@ class PostProcessor {
 
     this.isMerging = true;
     this.mergeSession = sessionName;
-
     this.logger.info(`Audio merge started: session=${sessionName}, snippets=${snippetCount}`);
 
-    const repoRoot = path.resolve(__dirname, "..");
-    const scriptPath = path.join(repoRoot, "py-process", "merge_audio.py");
-
-    const venvPython = path.join(repoRoot, ".venv", "Scripts", "python.exe");
-    const venvPythonUnix = path.join(repoRoot, ".venv", "bin", "python");
-    let pythonExe = "python";
-    if (fs.existsSync(venvPython)) pythonExe = venvPython;
-    else if (fs.existsSync(venvPythonUnix)) pythonExe = venvPythonUnix;
-
-    return new Promise((resolve) => {
-      const proc = spawn(pythonExe, [scriptPath, sessionName], { cwd: repoRoot });
-
-      let stdout = "";
-      let stderr = "";
-
-      proc.stdout.on("data", (data) => {
-        const line = data.toString();
-        stdout += line;
-        for (const l of line.split("\n").filter((s) => s.trim())) {
-          this.logger.info(`[merge_audio] ${l}`);
-        }
+    try {
+      const jobId = await this._startJob("merge", { session: sessionName });
+      const job = await this._pollJob(jobId, async (j) => {
+        await interaction.editReply({ content: `⏳ Merging audio for \`${sessionName}\` — ${j.step}…` });
       });
 
-      proc.stderr.on("data", (data) => {
-        stderr += data.toString();
-      });
-
-      proc.on("close", async (code) => {
-        this.isMerging = false;
-        this.mergeSession = null;
-
-        if (code === 0) {
-          this.logger.info(`Audio merge finished for session ${sessionName}`);
-          const mp3Path = path.join(sessionDir, "_session_mix.mp3");
-          await interaction.editReply({
-            content: [
-              `✅ Audio merge complete for session \`${sessionName}\``,
-              `Output: \`${mp3Path}\``,
-            ].join("\n"),
-          });
-        } else {
-          this.logger.error(`Audio merge failed for session ${sessionName} (exit ${code}): ${stderr}`);
-          await interaction.editReply({
-            content: `❌ Audio merge failed for session \`${sessionName}\`.\n\`\`\`\n${stderr.slice(0, 1500) || "Unknown error"}\n\`\`\``,
-          });
-        }
-        resolve();
-      });
-
-      proc.on("error", async (err) => {
-        this.isMerging = false;
-        this.mergeSession = null;
-        this.logger.error(`Failed to spawn merge_audio: ${err.message}`);
+      if (job.status === "done") {
+        this.logger.info(`Audio merge finished for session ${sessionName}`);
+        const mp3Path = path.join(sessionDir, "_session_mix.mp3");
         await interaction.editReply({
-          content: `❌ Failed to start audio merge: ${err.message}`,
+          content: [`✅ Audio merge complete for session \`${sessionName}\``, `Output: \`${mp3Path}\``].join("\n"),
         });
-        resolve();
+      } else {
+        this.logger.error(`Audio merge failed for session ${sessionName}: ${this._jobErrorText(job)}`);
+        await interaction.editReply({
+          content: `❌ Audio merge failed for session \`${sessionName}\`.\n\`\`\`\n${this._jobErrorText(job)}\n\`\`\``,
+        });
+      }
+    } catch (err) {
+      this.logger.error(`Could not run audio merge for ${sessionName}: ${err.message}`);
+      await interaction.editReply({
+        content: `❌ Could not run audio merge: ${err.message}\n${this._serviceHint()}`,
       });
-    });
+    } finally {
+      this.isMerging = false;
+      this.mergeSession = null;
+    }
   }
 
   /**
@@ -569,11 +491,11 @@ class PostProcessor {
   // ---------------------------------------------------------------------------
 
   /**
-   * Spawn vectorize.py for a given session (or all sessions).
+   * Trigger a vectorization job for a session (or all sessions).
    *
    * @param {import('discord.js').ChatInputCommandInteraction} interaction
    * @param {string} sessionName  Session folder name, or the literal string "all"
-   * @param {boolean} force       Pass --force to re-index already-vectorized sessions
+   * @param {boolean} force       Re-index already-vectorized sessions
    */
   async vectorize(interaction, sessionName, force) {
     if (this.isVectorizing) {
@@ -596,7 +518,6 @@ class PostProcessor {
         });
         return;
       }
-
       const combinedPath = path.join(sessionDir, "_combined_transcript.txt");
       if (!fs.existsSync(combinedPath)) {
         await interaction.reply({
@@ -611,73 +532,35 @@ class PostProcessor {
 
     this.isVectorizing = true;
     this.vectorizeSession = isAll ? "(all sessions)" : sessionName;
-
     this.logger.info(`Vectorization started: target=${this.vectorizeSession}, force=${force}`);
 
-    const repoRoot = path.resolve(__dirname, "..");
-    const scriptPath = path.join(repoRoot, "py-process", "vectorize.py");
-
-    const venvPython = path.join(repoRoot, ".venv", "Scripts", "python.exe");
-    const venvPythonUnix = path.join(repoRoot, ".venv", "bin", "python");
-    let pythonExe = "python";
-    if (fs.existsSync(venvPython)) pythonExe = venvPython;
-    else if (fs.existsSync(venvPythonUnix)) pythonExe = venvPythonUnix;
-
-    const args = [scriptPath];
-    if (isAll) {
-      args.push("--all");
-    } else {
-      args.push(sessionName);
-    }
-    if (force) args.push("--force");
-
-    return new Promise((resolve) => {
-      const proc = spawn(pythonExe, args, { cwd: repoRoot });
-
-      let stdout = "";
-      let stderr = "";
-
-      proc.stdout.on("data", (data) => {
-        const line = data.toString();
-        stdout += line;
-        for (const l of line.split("\n").filter((s) => s.trim())) {
-          this.logger.info(`[vectorize] ${l}`);
-        }
+    try {
+      const jobId = await this._startJob("vectorize", { session: sessionName, force: Boolean(force) });
+      const job = await this._pollJob(jobId, async (j) => {
+        await interaction.editReply({ content: `⏳ Vectorizing ${this.vectorizeSession} — ${j.step}…` });
       });
 
-      proc.stderr.on("data", (data) => {
-        stderr += data.toString();
-      });
-
-      proc.on("close", async (code) => {
-        this.isVectorizing = false;
-        this.vectorizeSession = null;
-
-        if (code === 0) {
-          this.logger.info(`Vectorization finished for ${isAll ? "all sessions" : sessionName}`);
-          const target = isAll ? "all sessions" : `session \`${sessionName}\``;
-          await interaction.editReply({
-            content: `✅ Vectorization complete for ${target}.\nData stored in \`${this.config.vector_db_directory || "./vectordb"}\``,
-          });
-        } else {
-          this.logger.error(`Vectorization failed (exit ${code}): ${stderr}`);
-          await interaction.editReply({
-            content: `❌ Vectorization failed.\n\`\`\`\n${stderr.slice(0, 1500) || "Unknown error"}\n\`\`\``,
-          });
-        }
-        resolve();
-      });
-
-      proc.on("error", async (err) => {
-        this.isVectorizing = false;
-        this.vectorizeSession = null;
-        this.logger.error(`Failed to spawn vectorize: ${err.message}`);
+      if (job.status === "done") {
+        this.logger.info(`Vectorization finished for ${isAll ? "all sessions" : sessionName}`);
+        const target = isAll ? "all sessions" : `session \`${sessionName}\``;
         await interaction.editReply({
-          content: `❌ Failed to start vectorization: ${err.message}`,
+          content: `✅ Vectorization complete for ${target}.\nData stored in \`${this.config.vector_db_directory || "./vectordb"}\``,
         });
-        resolve();
+      } else {
+        this.logger.error(`Vectorization failed: ${this._jobErrorText(job)}`);
+        await interaction.editReply({
+          content: `❌ Vectorization failed.\n\`\`\`\n${this._jobErrorText(job)}\n\`\`\``,
+        });
+      }
+    } catch (err) {
+      this.logger.error(`Could not run vectorization: ${err.message}`);
+      await interaction.editReply({
+        content: `❌ Could not run vectorization: ${err.message}\n${this._serviceHint()}`,
       });
-    });
+    } finally {
+      this.isVectorizing = false;
+      this.vectorizeSession = null;
+    }
   }
 
   /**
