@@ -111,7 +111,11 @@ class Recorder {
     // Live transcription: when enabled, each finished snippet is POSTed to the
     // warm-model transcription service (py-transcribe) as it is recorded.
     this._autoTranscribe = Boolean(config.auto_transcribe);
-    this._transcribePort = Number(config.transcribe_api_port) || 8200;
+    const transcribePort = Number(config.transcribe_api_port) || 8200;
+    // Connect URL: localhost for bare-metal, service name in Docker (config-set).
+    this._transcribeUrl = (
+      config.transcribe_api_url || `http://localhost:${transcribePort}`
+    ).replace(/\/$/, "");
     this._transcribeMinMs =
       config.transcribe_min_ms != null ? Number(config.transcribe_min_ms) : 400;
 
@@ -651,7 +655,7 @@ class Recorder {
    * @param {{dir: string, username: string}} entry
    */
   _enqueueSnippet(offsetMs, wavPath, entry) {
-    const url = `http://localhost:${this._transcribePort}/api/transcribe`;
+    const url = `${this._transcribeUrl}/api/transcribe`;
     const body = JSON.stringify({
       session: this.sessionName,
       username: path.basename(entry.dir),

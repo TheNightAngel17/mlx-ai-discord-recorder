@@ -1,11 +1,21 @@
-# MLX AI Discord Recorder — Whisper Transcription Pipeline
+# MLX AI Discord Recorder — Post-Processing Pipeline
 #
 # Core
 PyYAML>=6.0
-openai-whisper>=20231117    # OpenAI Whisper for speech-to-text transcription
 pydub>=0.25.1               # Audio mixing and MP3 compression (requires ffmpeg)
 
 # Vectorization (vectorize.py)
 chromadb>=0.5.0             # Local persistent vector database
 requests>=2.31.0            # HTTP client for embedding API calls
 python-dotenv>=1.0.0        # Load API keys from .env
+
+# Job-runner service (app.py)
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+
+# Batch transcription fallback — OPTIONAL.
+# transcribe.py imports whisper lazily and skips un-transcribed snippets if it's
+# missing. Live transcription (py-transcribe) normally produces a sidecar for
+# every snippet, so the lean Docker image omits this (and its torch dependency).
+# Install it for bare-metal use or to enable the offline batch fallback:
+openai-whisper>=20231117    # pulls torch (~GBs); omitted from the py-process Docker image

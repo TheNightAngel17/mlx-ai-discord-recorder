@@ -12,6 +12,7 @@ A Discord bot that records voice channel audio, transcribes it with [OpenAI Whis
 - [Installation](#installation)
 - [Configuration](#configuration)
 - [Quick Start](#quick-start)
+- [Running with Docker](#running-with-docker)
 - [Discord Developer Portal Setup](#discord-developer-portal-setup)
 - [AI Pipeline](#ai-pipeline)
 - [Project Structure](#project-structure)
@@ -280,20 +281,24 @@ pip install -r py-transcribe/requirements.txt
 
 ## Quick Start
 
-After installation, start the RAG API service (required for `/mlx-ai ask` commands), then start the bot:
+After installation, start the three backend services (RAG query, live transcription, and post-processing), then start the bot. The bot reaches them over HTTP — it no longer spawns Python itself. (Prefer containers? See [DOCKER.md](./DOCKER.md).)
 
 #### Bash
 
 ```bash
-# Terminal 1 — always-on RAG API service
+# Terminal 1 — RAG query API
 cd py-query
 uvicorn app:app --host 0.0.0.0 --port 8100
 
-# Terminal 2 — live transcription service (optional; needed for auto_transcribe)
+# Terminal 2 — live transcription service (needed for auto_transcribe)
 cd py-transcribe
 uvicorn app:app --host 0.0.0.0 --port 8200
 
-# Terminal 3 — Discord bot
+# Terminal 3 — post-processing job service (the bot triggers transcribe/merge/vectorize/summarize here)
+cd py-process
+uvicorn app:app --host 0.0.0.0 --port 8300
+
+# Terminal 4 — Discord bot
 cd js-bot
 node bot.js
 ```
@@ -301,15 +306,19 @@ node bot.js
 #### PowerShell
 
 ```powershell
-# Terminal 1 — always-on RAG API service
+# Terminal 1 — RAG query API
 cd py-query
 uvicorn app:app --host 0.0.0.0 --port 8100
 
-# Terminal 2 — live transcription service (optional; needed for auto_transcribe)
+# Terminal 2 — live transcription service (needed for auto_transcribe)
 cd py-transcribe
 uvicorn app:app --host 0.0.0.0 --port 8200
 
-# Terminal 3 — Discord bot
+# Terminal 3 — post-processing job service (the bot triggers transcribe/merge/vectorize/summarize here)
+cd py-process
+uvicorn app:app --host 0.0.0.0 --port 8300
+
+# Terminal 4 — Discord bot
 cd js-bot
 node bot.js
 ```
@@ -318,6 +327,29 @@ Then use Discord slash commands:
 
 1. `/mlx-ai session` — Open the interactive session control panel: set a name, select a voice channel, start/stop recording, choose a Whisper model, and run post-processing — all from one place
 2. `/mlx-ai ask question:What happened when the party entered the cave?` — Ask a natural-language question about any recorded session
+
+---
+
+## Running with Docker
+
+Prefer containers? The whole stack (bot + the three Python services, plus an
+optional local Ollama) runs via `docker-compose.yml`:
+
+```bash
+cp .env.example .env        # fill in DISCORD_TOKEN, GUILD_ID, any API keys
+docker compose build
+docker compose up -d                 # bot + py-process + py-query + py-transcribe
+docker compose --profile ollama up -d   # also start a local Ollama (GPU)
+```
+
+Recordings and the vector DB live in shared named volumes mounted at identical
+paths across containers. `py-transcribe` (and `ollama`) need the NVIDIA Container
+Toolkit on the host. The containers use `deploy/config.docker.yaml` (which
+overlays `config.yaml` with `/data/...` paths and service-name URLs), so the
+bare-metal `config.yaml` is left untouched.
+
+**See [DOCKER.md](./DOCKER.md)** for the full guide: volume/file-space model, GPU
+prerequisites, troubleshooting, and the path to Kubernetes (k3s).
 
 ---
 
@@ -393,33 +425,42 @@ mlx-ai-discord-recorder/
 │   └── prompts/                  # Reusable prompts for documentation updates
 │       ├── updateChangelog.prompt.md
 │       └── updateReadme.prompt.md
-├── config.yaml               # User-editable non-secret settings
+├── config.yaml               # User-editable non-secret settings (bare-metal)
 ├── CHANGELOG.md              # Project changelog
 ├── README.md                 # This file
+├── DOCKER.md                 # Docker / Compose guide (volumes, GPU, k3s notes)
+├── docker-compose.yml        # Full-stack composition (4 services + optional ollama)
+├── .dockerignore             # Keeps build contexts small / secret-free
+├── deploy/
+│   └── config.docker.yaml    # Container config overlay (/data paths + service-name URLs)
 │
-├── js-bot/                   # Discord bot (Node.js)
+├── js-bot/                   # Discord bot (Node.js, lean image)
 │   ├── bot.js                # Entry point — slash commands, interaction routing
-│   ├── recorder.js           # Voice recording logic (DAVE/E2EE support)
-│   ├── postProcessor.js      # Spawns Python scripts for processing pipeline
-│   ├── queryHandler.js       # Spawns py-query for RAG queries
+│   ├── recorder.js           # Voice recording; enqueues snippets to py-transcribe
+│   ├── postProcessor.js      # Triggers the py-process job service over HTTP
+│   ├── queryHandler.js       # Calls the py-query API for RAG queries
 │   ├── sessionPanel.js       # Interactive /mlx-ai session control panel
 │   ├── package.json          # Node.js dependencies
+│   ├── Dockerfile            # Lean Node image
 │   └── README.md             # JS bot documentation
 │
-├── py-process/               # Audio processing pipeline (Python)
+├── py-process/               # Post-processing job service (Python)
+│   ├── app.py                # FastAPI job runner (POST /api/process|merge|vectorize)
 │   ├── process.py            # Orchestrator — runs transcribe → merge → vectorize → summarize
-│   ├── transcribe.py         # Whisper transcription (WAVs → .txt files)
-│   ├── merge_audio.py        # Mix per-user WAVs → combined WAV + MP3
+│   ├── transcribe.py         # Assemble transcripts from sidecars (Whisper fallback)
+│   ├── merge_audio.py        # Mix per-user snippets → combined WAV + MP3
 │   ├── vectorize.py          # Chunk + embed transcripts → ChromaDB
 │   ├── summarize.py          # LLM session summaries → _session_summary.json/.md + ChromaDB
 │   ├── vectordb_helper.py    # CLI tool to inspect/search/manage the vector DB
 │   ├── requirements.txt      # Python dependencies
+│   ├── Dockerfile            # Lean image (no torch/whisper)
 │   └── README.md             # Processing pipeline documentation
 │
-├── py-transcribe/            # Live transcription service (Python)
+├── py-transcribe/            # Live transcription service (Python, GPU)
 │   ├── app.py                # FastAPI warm-model Whisper service (POST /api/transcribe, /api/session/finalize, GET /api/health)
 │   ├── providers.py          # Transcriber abstraction (faster-whisper, openai-whisper)
 │   ├── requirements.txt      # Python dependencies
+│   ├── Dockerfile            # CUDA + faster-whisper image (GPU)
 │   └── README.md             # Transcription service documentation
 │
 └── py-query/                 # RAG query service (Python)
@@ -428,6 +469,7 @@ mlx-ai-discord-recorder/
     ├── rag.py                # Core RAG logic (embed → retrieve → generate)
     ├── providers.py          # LLM provider abstraction (Ollama, OpenAI, Anthropic)
     ├── requirements.txt      # Python dependencies
+    ├── Dockerfile            # CPU image
     └── README.md             # Query service documentation
 ```
 

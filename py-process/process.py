@@ -48,8 +48,8 @@ def finalize_live_transcription(session: str, config: dict) -> None:
     if not config.get("auto_transcribe"):
         return
 
-    port = config.get("transcribe_api_port", 8200)
-    url = f"http://localhost:{port}/api/session/finalize"
+    base = config.get("transcribe_api_url") or f"http://localhost:{config.get('transcribe_api_port', 8200)}"
+    url = f"{base.rstrip('/')}/api/session/finalize"
     try:
         resp = requests.post(url, json={"session": session}, timeout=900)
         resp.raise_for_status()

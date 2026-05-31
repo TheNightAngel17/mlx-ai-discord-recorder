@@ -37,7 +37,8 @@ class QueryHandler {
     await interaction.deferReply();
 
     const port = this.config.query_api_port || 8100;
-    const url = `http://localhost:${port}/api/query`;
+    const baseUrl = this.config.query_api_url || `http://localhost:${port}`;
+    const url = `${baseUrl.replace(/\/$/, "")}/api/query`;
 
     const body = {
       question,

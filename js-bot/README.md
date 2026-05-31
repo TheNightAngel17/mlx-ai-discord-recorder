@@ -2,6 +2,8 @@
 
 The JavaScript Discord bot that handles voice recording, slash command registration, and orchestrates the Python processing pipeline. Built on [discord.js](https://discord.js.org/) with native **DAVE (Discord Audio & Video Encryption)** support.
 
+> 🐳 **Running in Docker?** See [DOCKER.md](../DOCKER.md). The bot is a lean Node image that reaches the Python services (`py-transcribe`, `py-process`, `py-query`) by name over the Compose network.
+
 > **↩️ Back to [main README](../README.md)** | See also: [py-process](../py-process/README.md) · [py-query](../py-query/README.md)
 
 ---

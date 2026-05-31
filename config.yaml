@@ -68,6 +68,20 @@ transcribe_compute_type: float16
 # Snippets shorter than this many ms are treated as non-speech blips and skipped
 # (both live and in the batch fallback).
 transcribe_min_ms: 400
+# URL the bot and process.py use to REACH this service. Use localhost for
+# bare-metal; in Docker set it to the service name (e.g. http://py-transcribe:8200).
+transcribe_api_url: http://localhost:8200
+
+# ====================================================
+# Post-processing job service (py-process/app.py)
+# ====================================================
+# Runs transcribe -> merge -> vectorize -> summarize as background jobs that the
+# bot triggers over HTTP (instead of spawning Python directly). Start with:
+#   cd py-process && uvicorn app:app --host 0.0.0.0 --port 8300
+process_api_host: 0.0.0.0
+process_api_port: 8300
+# URL the bot uses to reach this service (the service name in Docker).
+process_api_url: http://localhost:8300
 
 # Vector DB and RAG settings
 # Update these paths to match your OS (Windows: D:/path, Linux/macOS: /path or ./relative)
@@ -129,6 +143,9 @@ ollama_base_url: http://localhost:11434    # Ollama API base URL
 # Start the API with: uvicorn app:app --host 0.0.0.0 --port 8100
 query_api_host: 0.0.0.0    # Host the API server binds to (0.0.0.0 = all interfaces)
 query_api_port: 8100        # Port the API server listens on
+# URL the bot uses to REACH this service. localhost for bare-metal; in Docker set
+# it to the service name (e.g. http://py-query:8100).
+query_api_url: http://localhost:8100
 # API keys for cloud providers go in .env — never in this file:
 #   OPENAI_API_KEY=sk-...
 #   ANTHROPIC_API_KEY=sk-ant-...
