@@ -32,7 +32,7 @@ A Discord bot that records voice channel audio, transcribes it with [OpenAI Whis
 - 🧠 **Vector embeddings** — chunk and embed transcripts into ChromaDB
 - 📋 **Automatic session summaries** — LLM-generated narrative summaries with key moments, NPCs, and locations posted to Discord
 - 🔍 **RAG query** — ask natural-language questions about your sessions via Discord or CLI
-- 🔌 **Multi-provider LLM support** — Ollama (local), OpenAI, and Anthropic
+- 🔌 **Multi-provider LLM support** — Ollama (local), OpenAI, Anthropic, and Voyage AI (embeddings)
 
 ---
 
@@ -48,7 +48,7 @@ A Discord bot that records voice channel audio, transcribes it with [OpenAI Whis
 │                   py-process/ (Python)                           │
 │                       │  Transcribes (Whisper)                   │
 │                       │  Merges audio (pydub/ffmpeg)             │
-│                       │  Vectorizes (ChromaDB + Ollama)          │
+│                       │  Vectorizes (ChromaDB + Ollama/OpenAI/Voyage) │
 │                       ▼                                          │
 │                   py-query/ (Python)                             │
 │                       │  RAG queries (embed → retrieve → chat)   │
@@ -173,6 +173,7 @@ GUILD_ID=your_guild_id_here
 # Optional (only if using cloud LLM providers)
 # OPENAI_API_KEY=sk-...
 # ANTHROPIC_API_KEY=sk-ant-...
+# VOYAGE_API_KEY=pa-...
 ```
 
 ### 3. Review Configuration
@@ -235,6 +236,7 @@ pip install -r py-query/requirements.txt
 | `GUILD_ID` | ✅ | Numeric server ID where the bot operates |
 | `OPENAI_API_KEY` | Only if using OpenAI provider | OpenAI API key |
 | `ANTHROPIC_API_KEY` | Only if using Anthropic provider | Anthropic API key |
+| `VOYAGE_API_KEY` | Only if using Voyage embedding provider | Voyage API key |
 
 ### `config.yaml` — Non-Secret Settings
 
@@ -248,7 +250,7 @@ pip install -r py-query/requirements.txt
 | `whisper_language` | `"en"` | Default language code, or `"auto"` for auto-detection |
 | `vector_db_directory` | `./vectordb` | Where ChromaDB persists its data |
 | `chunk_minutes` | `3` | Time-window size (minutes) for chunking transcripts |
-| `embedding_provider` | `ollama` | Embedding backend: `ollama` or `openai` |
+| `embedding_provider` | `ollama` | Embedding backend: `ollama`, `openai`, or `voyage` |
 | `embedding_model` | `nomic-embed-text` | Model name for the chosen embedding provider |
 | `chat_provider` | `ollama` | Chat backend: `ollama`, `openai`, or `anthropic` |
 | `chat_model` | `llama3.2` | Model name for the chosen chat provider |
@@ -259,7 +261,7 @@ pip install -r py-query/requirements.txt
 | `summary_max_tokens` | `2000` | Approximate token budget for the LLM when generating session summaries |
 | `summary_max_input_tokens` | `32000` | Maximum input tokens per summarization chunk (adjust to your model's context window) |
 
-> ⚠️ **Warning:** Changing `embedding_provider` or `embedding_model` after vectorizing sessions requires re-running `python py-process/vectorize.py --all --force`.
+> ⚠️ **Warning:** Changing `embedding_provider` or `embedding_model` after vectorizing sessions requires re-running `python py-process/vectorize.py --all --force --reset-collection`.
 
 ---
 
@@ -352,7 +354,7 @@ Record ──► Transcribe ──► Merge Audio ──► Vectorize ──► 
 | **Record** | `/mlx-ai session` → ⏺ Start Recording | `js-bot/recorder.js` |
 | **Transcribe** | `/mlx-ai session` → ⚙️ Post-Process or `python py-process/transcribe.py` | OpenAI Whisper |
 | **Merge Audio** | `/mlx-ai session` → ⚙️ Post-Process or `python py-process/merge_audio.py` | pydub + ffmpeg |
-| **Vectorize** | `/mlx-ai session` → ⚙️ Post-Process or `python py-process/vectorize.py` | ChromaDB + Ollama/OpenAI |
+| **Vectorize** | `/mlx-ai session` → ⚙️ Post-Process or `python py-process/vectorize.py` | ChromaDB + Ollama/OpenAI/Voyage |
 | **Summarize** | `/mlx-ai session` → ☑ Generate Summary toggle + ⚙️ Post-Process, or `python py-process/summarize.py` | LLM (Ollama/OpenAI/Anthropic) |
 | **Query** | `/mlx-ai ask` or `python py-query/query.py` | RAG (embed → retrieve → chat) |
 

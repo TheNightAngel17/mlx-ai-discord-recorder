@@ -28,23 +28,48 @@ vector_db_directory: D:/mlx-ai-vectordb   # Where ChromaDB persists data
 chunk_minutes: 3                           # Time-window size for chunking transcripts (minutes)
 
 # LLM Provider settings
-# Supported embedding providers: ollama | openai
+# Supported embedding providers: ollama | openai | voyage
 # Supported chat providers:      ollama | openai | anthropic
-# NOTE: Anthropic does NOT offer an embedding API — use ollama or openai for embeddings.
+# NOTE: Anthropic does NOT offer an embedding API — use ollama, openai, or voyage for embeddings.
 #
+
+
+# ====================================================
+# Vectorization (embedding) Provider Settings
+# =====================================================
+
 # WARNING: embedding_provider and embedding_model must match what was used when
 # vectorize.py indexed the sessions. Changing them requires re-running:
-#   python py-process/vectorize.py --all --force
-embedding_provider: ollama          # ollama | openai
-embedding_model: nomic-embed-text   # Model name for the chosen embedding provider
+#   python py-process/vectorize.py --all --force --reset-collection  
+# This will fully reset the DB collection, and then re-process and re-index all sessions with the new provider/model settings.
 
 # OLLAMA SETTINGS
-chat_provider: ollama
-chat_model: llama3.2
+# embedding_provider: ollama 
+# embedding_model: nomic-embed-text 
+
+# OPENAI SETTINGS
+# embedding_provider: openai
+# embedding_model: text-embedding-3-small
+
+# VOYAGE AI SETTINGS
+embedding_provider: voyage
+embedding_model: voyage-3-large   # Options: voyage-3-large, voyage-3, voyage-3-lite
+
+
+
+
+
+# ====================================================
+# Chat Provider Settings
+# =====================================================
+
+# OLLAMA SETTINGS
+# chat_provider: ollama
+# chat_model: llama3.2
 
 # ANTHROPIC SETTINGS
-# chat_provider: anthropic
-# chat_model: claude-sonnet-4-5
+chat_provider: anthropic
+chat_model: claude-sonnet-4-6
 
 # OPENAI SETTINGS
 # chat_provider: openai
@@ -60,6 +85,7 @@ query_api_port: 8100        # Port the API server listens on
 # API keys for cloud providers go in .env — never in this file:
 #   OPENAI_API_KEY=sk-...
 #   ANTHROPIC_API_KEY=sk-ant-...
+#   VOYAGE_API_KEY=pa-...
 
 # Session summary settings
 # auto_summarize: when true, process.py automatically runs summarize.py after vectorization.

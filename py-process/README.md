@@ -462,7 +462,7 @@ All configuration is in the root `config.yaml`. The fields relevant to `py-proce
 | `mp3_bitrate` | `"128k"` | MP3 compression bitrate |
 | `keep_wav` | `true` | Keep original WAV files after MP3 export |
 | `vector_db_directory` | `./vectordb` | ChromaDB persistence directory |
-| `embedding_provider` | `ollama` | Embedding backend: `ollama` or `openai` |
+| `embedding_provider` | `ollama` | Embedding backend: `ollama`, `openai`, or `voyage` |
 | `embedding_model` | `nomic-embed-text` | Embedding model name |
 | `chunk_minutes` | `3` | Time-window for transcript chunking (minutes) |
 | `chat_provider` | `ollama` | Chat LLM backend: `ollama`, `openai`, or `anthropic` |
