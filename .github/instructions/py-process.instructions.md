@@ -39,7 +39,8 @@ applyTo: "py-process/**"
 - **Spawned by the JS bot.** These scripts are invoked via `child_process.spawn()` from `js-bot/`. Do not assume they are run standalone by default.
 - **Use list arguments in `subprocess.run()`.** Never `shell=True` — this prevents shell injection.
 - **Single ChromaDB collection** (`dnd_sessions`). All sessions share one collection with metadata filtering — not one collection per session.
-- **`SilencePadTransform` alignment.** Per-user WAV files produced by `recorder.js` are time-padded so they align. Pipeline scripts must preserve this alignment when merging or splitting audio.
+- **Snippet layout & filename-encoded offsets.** `recorder.js` writes per-user utterance snippets to `<session>/<username>/<offset_ms>.wav`, where the filename is the snippet's session-relative start offset in milliseconds. Pipeline scripts derive all timing from that offset (add it to Whisper timestamps; place clips at it when mixing) — there is no in-file silence padding to preserve. Skip `_`/`.`-prefixed entries when scanning a session folder.
+- **Sidecar-aware transcription.** When `auto_transcribe` is on, the live service (`py-transcribe`) writes `<offset_ms>.json` sidecars (session-relative segments) during the session. `transcribe.py` loads sidecars when present and **only loads Whisper for snippets that lack one** (skipping it entirely when all are present); `process.py` first calls `/api/session/finalize` to drain the queue. Keep `transcribe.py` runnable standalone as the full batch fallback, and keep `_combined_transcript.txt` format unchanged so vectorize/summarize stay compatible.
 
 ## Common Pitfalls
 

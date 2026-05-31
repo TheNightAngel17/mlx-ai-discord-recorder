@@ -12,7 +12,6 @@
 
 const fs = require("fs");
 const path = require("path");
-const { Transform } = require("stream");
 const {
   joinVoiceChannel,
   entersState,
@@ -35,68 +34,15 @@ const BIT_DEPTH = 16; // 16-bit PCM
 const BYTES_PER_SAMPLE = BIT_DEPTH / 8;
 
 // Discord sends 20ms Opus frames: 960 samples per channel at 48 kHz
-const FRAME_DURATION_MS = 20;
-const FRAME_BYTES = (SAMPLE_RATE * CHANNELS * BYTES_PER_SAMPLE * FRAME_DURATION_MS) / 1000; // 3840 bytes per 20ms frame
+const OPUS_FRAME_SIZE = 960;
+
+// Bytes in one full PCM sample frame (all channels). Used to align any appended
+// silence padding to a clean sample boundary.
+const BLOCK_ALIGN = CHANNELS * BYTES_PER_SAMPLE;
 
 // Timeouts
 const CONNECTION_READY_TIMEOUT_MS = 20_000; // max wait for VoiceConnectionStatus.Ready
-const STREAM_FINISH_TIMEOUT_MS = 3_000; // max wait for fileStream 'finish' on stop
-
-/**
- * A Transform stream that injects silence buffers for gaps in incoming PCM data.
- *
- * Discord stops sending Opus packets when a user is silent (voice activity
- * detection). Without padding, the WAV file's timeline collapses — e.g. a user
- * who speaks at 0:00 and again at 2:00 would have both utterances back-to-back.
- *
- * This stream tracks wall-clock time between received chunks and writes zero-
- * filled (silence) PCM data for any gap longer than one frame (20ms). This keeps
- * all per-user WAV files time-aligned with the recording session start.
- */
-class SilencePadTransform extends Transform {
-  /**
-   * @param {number} sessionStartTime  Date.now() when the recording session started
-   */
-  constructor(sessionStartTime) {
-    super();
-    this.sessionStartTime = sessionStartTime;
-    this.bytesWritten = 0;
-  }
-
-  _transform(chunk, _encoding, callback) {
-    const now = Date.now();
-    const elapsedMs = now - this.sessionStartTime;
-    const expectedBytes = Math.floor(
-      (elapsedMs / 1000) * SAMPLE_RATE * CHANNELS * BYTES_PER_SAMPLE
-    );
-
-    // If we're behind where we should be, fill the gap with silence
-    const gap = expectedBytes - this.bytesWritten;
-    if (gap > FRAME_BYTES) {
-      // Round to nearest frame boundary to avoid partial-frame artifacts
-      const silenceBytes = Math.floor(gap / FRAME_BYTES) * FRAME_BYTES;
-      // Write silence in chunks to avoid huge single allocations
-      const CHUNK_SIZE = 48000; // ~250ms at a time
-      let remaining = silenceBytes;
-      while (remaining > 0) {
-        const size = Math.min(remaining, CHUNK_SIZE);
-        this.push(Buffer.alloc(size, 0));
-        remaining -= size;
-      }
-      this.bytesWritten += silenceBytes;
-    }
-
-    // Write the actual audio data
-    this.push(chunk);
-    this.bytesWritten += chunk.length;
-
-    callback();
-  }
-
-  _flush(callback) {
-    callback();
-  }
-}
+const STREAM_FINISH_TIMEOUT_MS = 3_000; // max wait for an in-flight snippet to flush on stop
 
 /**
  * Build a WAV file Buffer from raw PCM data.
@@ -151,6 +97,24 @@ class Recorder {
     this.config = config;
     this.logger = logger;
 
+    // How long a user must be silent before the current utterance snippet is
+    // closed. This window doubles as the "back-pad": the receiver keeps the
+    // stream open until the user is genuinely silent this long, so trailing
+    // words spoken right before Discord's early "stopped talking" signal are
+    // still captured. Too low fragments sentences; too high merges utterances.
+    this._silenceMs = Number(config.snippet_silence_ms) || 1000;
+    // Extra trailing silence (ms) appended to each snippet so Whisper has a
+    // little lead-out and does not clip the final word. Set 0 to disable.
+    this._tailPadMs =
+      config.snippet_tail_pad_ms != null ? Number(config.snippet_tail_pad_ms) : 200;
+
+    // Live transcription: when enabled, each finished snippet is POSTed to the
+    // warm-model transcription service (py-transcribe) as it is recorded.
+    this._autoTranscribe = Boolean(config.auto_transcribe);
+    this._transcribePort = Number(config.transcribe_api_port) || 8200;
+    this._transcribeMinMs =
+      config.transcribe_min_ms != null ? Number(config.transcribe_min_ms) : 400;
+
     this.isRecording = false;
     /** @type {import('@discordjs/voice').VoiceConnection|null} */
     this.connection = null;
@@ -161,8 +125,10 @@ class Recorder {
     /** @type {Date|null} */
     this.startTime = null;
 
-    // userId -> { username, opusStream, decoder, fileStream, pcmPath }
-    this.audioBuffers = new Map();
+    // userId -> { username, dir, snippetCount, active: Set<utterance> }
+    // One entry per participant who has spoken; `active` holds in-flight
+    // utterance captures so stop() can flush them.
+    this.users = new Map();
 
     /**
      * Optional callback invoked when a user joins mid-session.
@@ -248,7 +214,22 @@ class Recorder {
     this.sessionName = folderName;
     this.sessionDir = sessionDir;
     this.startTime = new Date();
-    this.audioBuffers = new Map();
+    this.users = new Map();
+
+    // Persist session-level metadata so the Python pipeline can map snippet
+    // offsets back to absolute wall-clock time if needed.
+    try {
+      fs.writeFileSync(
+        path.join(sessionDir, "_session.metadata.json"),
+        JSON.stringify(
+          { session_start_ms: this.startTime.getTime(), session_name: folderName },
+          null,
+          2
+        )
+      );
+    } catch (err) {
+      this.logger.warn(`Could not write session metadata: ${err.message}`);
+    }
 
     // Debug: log every state transition so we can see where it stalls
     connection.on("stateChange", (oldState, newState) => {
@@ -273,30 +254,22 @@ class Recorder {
       this.sessionName = null;
       this.sessionDir = null;
       this.startTime = null;
-      this.audioBuffers = new Map();
+      this.users = new Map();
       await interaction.editReply({
         content: "Timed out waiting for voice connection to be ready.",
       });
       return;
     }
 
-    // Subscribe to all members currently in the channel
-    for (const member of voiceChannel.members.values()) {
-      if (!member.user.bot) {
-        this._subscribeUser(member.user.id, member.user.username);
-      }
-    }
-
-    // Also subscribe to any user who starts speaking (handles mid-session joins
-    // at the audio level, before voiceStateUpdate fires)
+    // Capture begins when someone speaks. Each time a user starts talking we
+    // open a fresh per-utterance stream that auto-closes after a silence gap
+    // (see _startUtterance). Members present at start are not pre-subscribed —
+    // their first utterance creates their sub-folder.
     const receiver = connection.receiver;
     receiver.speaking.on("start", (userId) => {
       if (!this.isRecording) return;
-      if (!this.audioBuffers.has(userId)) {
-        const member = voiceChannel.guild.members.cache.get(userId);
-        const username = member ? member.user.username : userId;
-        this._subscribeUser(userId, username);
-      }
+      const entry = this._ensureUser(userId, voiceChannel.guild);
+      this._startUtterance(userId, entry);
     });
 
     this.logger.info(
@@ -355,80 +328,30 @@ class Recorder {
       ? interactionOrGuild.guild
       : interactionOrGuild;
     const sessionName = this.sessionName;
-    const sessionDir = this.sessionDir;
     const outputDir = this.config.output_directory || "./recordings";
 
-    // Save WAV files for all captured users
-    const sessionStartMs = this.startTime.getTime();
-    const savePromises = [];
-    for (const [userId, entry] of this.audioBuffers.entries()) {
-      const { username, opusStream, silencePad, fileStream, pcmPath, audioStartOffsetMs } = entry;
-
-      savePromises.push(
-        new Promise((resolve) => {
-          // Stop new opus packets from coming in
-          if (opusStream && !opusStream.destroyed) {
-            opusStream.destroy();
-          }
-          // End the silence padder so it flushes and lets the file stream finish
-          if (silencePad && !silencePad.destroyed) {
-            silencePad.end();
-          }
-
-          const finish = () => {
-            try {
-              const pcmData = fs.readFileSync(pcmPath);
-              if (pcmData.length === 0) {
-                this.logger.warn(
-                  `No audio captured for ${username} — skipping.`
-                );
-                fs.unlinkSync(pcmPath);
-              } else {
-                const safeName = sanitiseName(username);
-                const wavPath = path.join(sessionDir, `${safeName}.wav`);
-                fs.writeFileSync(wavPath, buildWav(pcmData));
-                // Write per-user metadata so the Python pipeline can align
-                // Whisper timestamps to true session-relative time.
-                const metaPath = path.join(sessionDir, `${safeName}.metadata.json`);
-                fs.writeFileSync(
-                  metaPath,
-                  JSON.stringify(
-                    { session_start_ms: sessionStartMs, audio_start_offset_ms: audioStartOffsetMs },
-                    null,
-                    2
-                  )
-                );
-                fs.unlinkSync(pcmPath); // clean up temp PCM
-                this.logger.info(
-                  `Saved recording for ${username} -> ${wavPath}`
-                );
-              }
-            } catch (err) {
-              this.logger.error(
-                `Failed to save WAV for ${username}: ${err.message}`
-              );
-            }
-            resolve();
-          };
-
-          if (fileStream.writableEnded || fileStream.destroyed) {
-            finish();
-          } else {
-            // Fallback timeout in case 'finish' never fires
-            const timer = setTimeout(finish, STREAM_FINISH_TIMEOUT_MS);
-            fileStream.once("finish", () => {
-              clearTimeout(timer);
-              finish();
-            });
-            fileStream.once("error", () => {
-              clearTimeout(timer);
-              finish();
-            });
-          }
-        })
-      );
+    // Flush any in-flight utterance snippets. Snippets that already hit their
+    // silence boundary were written to disk when their stream ended; here we
+    // only need to close the ones still capturing at stop time.
+    const flushPromises = [];
+    for (const entry of this.users.values()) {
+      for (const utterance of [...entry.active]) {
+        flushPromises.push(utterance.close());
+      }
     }
-    await Promise.all(savePromises);
+    await Promise.all(flushPromises);
+
+    // Remove any sub-folders that ended up with no snippets (e.g. a user who
+    // triggered a speaking event but produced no decodable audio).
+    for (const entry of this.users.values()) {
+      if (entry.snippetCount === 0) {
+        try {
+          fs.rmdirSync(entry.dir);
+        } catch {
+          /* non-empty or already gone — leave it */
+        }
+      }
+    }
 
     // Disconnect
     if (this.connection) {
@@ -474,7 +397,7 @@ class Recorder {
     this.logger.info(`Recording session finished: ${sessionName}`);
 
     // Reset state
-    this.audioBuffers = new Map();
+    this.users = new Map();
     this.recordingChannel = null;
     this.sessionName = null;
     this.sessionDir = null;
@@ -574,53 +497,185 @@ class Recorder {
   // -------------------------------------------------------------------------
 
   /**
-   * Subscribe to a user's audio stream and collect PCM chunks.
+   * Ensure a per-participant tracking entry (and sub-folder) exists for a user.
+   * Called the first time a user speaks; their sub-folder is created lazily so
+   * participants who never talk leave no empty folders behind.
    *
    * @param {string} userId
-   * @param {string} username
+   * @param {import('discord.js').Guild} guild
+   * @returns {{username: string, dir: string, snippetCount: number, active: Set}}
    */
-  _subscribeUser(userId, username) {
+  _ensureUser(userId, guild) {
+    let entry = this.users.get(userId);
+    if (entry) return entry;
+
+    const member = guild.members.cache.get(userId);
+    const username = member ? member.user.username : userId;
+    const dir = path.join(this.sessionDir, sanitiseName(username));
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+    } catch (err) {
+      this.logger.error(`Could not create folder for ${username}: ${err.message}`);
+    }
+
+    entry = { username, dir, snippetCount: 0, active: new Set() };
+    this.users.set(userId, entry);
+    this.logger.info(`Now recording ${username} (${userId}) -> ${dir}`);
+    return entry;
+  }
+
+  /**
+   * Open a fresh per-utterance capture for a user, if one isn't already running.
+   *
+   * Each utterance is subscribed with EndBehaviorType.AfterSilence: the stream
+   * stays open until the user has been silent for `_silenceMs`, then closes and
+   * the collected PCM is written as a timestamped snippet WAV. The snippet
+   * filename is the zero-padded session-relative start offset in milliseconds,
+   * so files sort chronologically and the offset is the single source of truth
+   * for the snippet's place on the session timeline.
+   *
+   * @param {string} userId
+   * @param {{dir: string, snippetCount: number, active: Set, username: string}} entry
+   */
+  _startUtterance(userId, entry) {
     if (!this.connection || !this.isRecording) return;
-    if (this.audioBuffers.has(userId)) return; // already subscribed
 
     const receiver = this.connection.receiver;
-    const opusStream = receiver.subscribe(userId, {
-      end: { behavior: EndBehaviorType.Manual },
-    });
+    // The receiver tracks one active subscription per user. While an utterance
+    // is mid-capture, repeated `speaking start` events are ignored here so we
+    // don't split a single utterance across multiple files.
+    if (receiver.subscriptions.has(userId)) return;
 
+    const offsetMs = Date.now() - this.startTime.getTime();
+
+    const opusStream = receiver.subscribe(userId, {
+      end: { behavior: EndBehaviorType.AfterSilence, duration: this._silenceMs },
+    });
     const decoder = new prism.opus.Decoder({
       rate: SAMPLE_RATE,
       channels: CHANNELS,
-      frameSize: 960,
+      frameSize: OPUS_FRAME_SIZE,
     });
 
-    // Silence padding transform — injects silence for gaps when the user isn't
-    // speaking, keeping the WAV timeline aligned with wall-clock time from
-    // session start. This ensures all per-user files stay in sync.
-    const silencePad = new SilencePadTransform(this.startTime.getTime());
+    const chunks = [];
+    let finalized = false;
 
-    // Record how far into the session this user's audio subscription began.
-    // Stored in the per-user metadata JSON so the Python pipeline can use it
-    // as an authoritative baseline when aligning Whisper transcript timestamps.
-    const audioStartOffsetMs = Date.now() - this.startTime.getTime();
+    const utterance = { opusStream, decoder, offsetMs };
 
-    // Write PCM directly to a temp file to avoid in-memory buffering races
-    const pcmPath = path.join(
-      this.sessionDir,
-      `${sanitiseName(username)}.pcm`
-    );
-    const fileStream = fs.createWriteStream(pcmPath);
+    const finalize = () => {
+      if (finalized) return;
+      finalized = true;
+      entry.active.delete(utterance);
 
-    opusStream.pipe(decoder).pipe(silencePad).pipe(fileStream);
+      try {
+        let pcm = Buffer.concat(chunks);
+        if (pcm.length === 0) return; // nothing decodable — drop it
 
+        // Duration of captured speech, measured before tail padding — used to
+        // skip enqueuing sub-threshold blips for transcription.
+        const speechMs =
+          (pcm.length / (SAMPLE_RATE * CHANNELS * BYTES_PER_SAMPLE)) * 1000;
+
+        // Append a short tail of silence so Whisper doesn't clip the last word.
+        if (this._tailPadMs > 0) {
+          const padBytes =
+            Math.floor(
+              ((this._tailPadMs / 1000) * SAMPLE_RATE * CHANNELS * BYTES_PER_SAMPLE) /
+                BLOCK_ALIGN
+            ) * BLOCK_ALIGN;
+          if (padBytes > 0) pcm = Buffer.concat([pcm, Buffer.alloc(padBytes, 0)]);
+        }
+
+        const wavPath = path.join(
+          entry.dir,
+          `${String(offsetMs).padStart(10, "0")}.wav`
+        );
+        fs.writeFileSync(wavPath, buildWav(pcm));
+        entry.snippetCount += 1;
+
+        // Live transcription: hand the finished snippet to the warm-model
+        // service (fire-and-forget — must not block capture).
+        if (this._autoTranscribe && speechMs >= this._transcribeMinMs) {
+          this._enqueueSnippet(offsetMs, wavPath, entry);
+        }
+      } catch (err) {
+        this.logger.error(`Failed to save snippet for ${entry.username}: ${err.message}`);
+      }
+    };
+
+    decoder.on("data", (chunk) => chunks.push(chunk));
+    decoder.on("end", finalize);
     decoder.on("error", (err) => {
-      this.logger.warn(`Opus decoder error for ${username}: ${err.message}`);
+      this.logger.warn(`Opus decoder error for ${entry.username}: ${err.message}`);
+    });
+    opusStream.on("error", (err) => {
+      this.logger.warn(`Opus stream error for ${entry.username}: ${err.message}`);
     });
 
-    const entry = { username, opusStream, decoder, silencePad, fileStream, pcmPath, audioStartOffsetMs };
-    this.audioBuffers.set(userId, entry);
+    // Manual flush used by stop(): stop feeding the decoder, flush it so 'end'
+    // fires promptly, and write whatever PCM we have. The timer is only a
+    // safety net in case the decoder never emits 'end'.
+    utterance.close = () =>
+      new Promise((resolve) => {
+        if (finalized) return resolve();
+        const done = () => {
+          finalize();
+          resolve();
+        };
+        const timer = setTimeout(done, STREAM_FINISH_TIMEOUT_MS);
+        decoder.once("end", () => {
+          clearTimeout(timer);
+          done();
+        });
+        decoder.once("close", () => {
+          clearTimeout(timer);
+          done();
+        });
+        opusStream.unpipe(decoder);
+        if (!opusStream.destroyed) opusStream.destroy();
+        decoder.end();
+      });
 
-    this.logger.info(`Subscribed to audio for ${username} (${userId})`);
+    entry.active.add(utterance);
+    opusStream.pipe(decoder);
+  }
+
+  /**
+   * Fire-and-forget POST of a finished snippet to the live transcription service
+   * (py-transcribe). Failures (e.g. the service isn't running) are logged and
+   * ignored — the snippet WAV stays on disk and the batch fallback in
+   * transcribe.py will transcribe it at post-process time.
+   *
+   * @param {number} offsetMs   Session-relative start offset of the snippet
+   * @param {string} wavPath    Path to the written snippet WAV
+   * @param {{dir: string, username: string}} entry
+   */
+  _enqueueSnippet(offsetMs, wavPath, entry) {
+    const url = `http://localhost:${this._transcribePort}/api/transcribe`;
+    const body = JSON.stringify({
+      session: this.sessionName,
+      username: path.basename(entry.dir),
+      offset_ms: offsetMs,
+      wav_path: path.resolve(wavPath),
+    });
+    fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body,
+      signal: AbortSignal.timeout(5000),
+    })
+      .then((res) => {
+        if (!res.ok) {
+          this.logger.warn(
+            `Transcription enqueue returned HTTP ${res.status} for ${path.basename(wavPath)}`
+          );
+        }
+      })
+      .catch((err) => {
+        this.logger.warn(
+          `Could not enqueue snippet for live transcription (is py-transcribe running?): ${err.message}`
+        );
+      });
   }
 
   /**

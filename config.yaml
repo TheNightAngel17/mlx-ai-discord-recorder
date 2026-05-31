@@ -12,7 +12,24 @@ announce_channel: "bot-commands"
 
 # Audio merge and compression settings
 mp3_bitrate: "128k"     # MP3 bitrate for compression (e.g. "64k", "128k", "192k", "320k")
-keep_wav: true           # Whether to keep original WAV files after MP3 conversion
+keep_wav: true           # Keep the per-user snippet WAVs after the session mix is exported.
+                         # Set false to delete snippets (and their sub-folders) once merge_audio.py finishes.
+
+# Recording / snippet settings
+# Each participant's speech is captured as discrete utterance snippets in a
+# per-user sub-folder: <session>/<username>/<offset_ms>.wav
+#
+# snippet_silence_ms: how long a user must be continuously silent before the
+#   current utterance snippet is closed. This window also acts as a "back-pad" —
+#   the stream stays open until the speaker is genuinely silent this long, so
+#   trailing words (which Discord can signal as "stopped" a touch early) are
+#   still captured. Tuning trade-off:
+#     too low  (e.g. 300)  -> sentences fragment across files; Whisper loses context
+#     too high (e.g. 3000) -> separate utterances merge into one long snippet
+snippet_silence_ms: 1000
+# snippet_tail_pad_ms: extra trailing silence appended to each snippet so Whisper
+#   has a short lead-out and doesn't clip the final word. Set 0 to disable.
+snippet_tail_pad_ms: 200
 
 # Whisper transcription defaults.
 # These are used when the /mlx-ai transcribe start command is run
@@ -21,6 +38,36 @@ keep_wav: true           # Whether to keep original WAV files after MP3 conversi
 whisper_model: "base"
 # Language code (e.g. "en", "es", "fr"). Set to "auto" for auto-detection.
 whisper_language: "en"
+
+# ====================================================
+# Live transcription service (py-transcribe/app.py)
+# ====================================================
+# When auto_transcribe is on, the recorder POSTs each finished utterance snippet
+# to a warm-model Whisper service that transcribes it immediately, writing a
+# <offset_ms>.json sidecar next to the WAV. At post-process time transcribe.py
+# assembles the combined transcript from those sidecars (no model reload), so
+# most transcription work happens *during* the session instead of after it.
+#
+# Start the service with:
+#   cd py-transcribe && uvicorn app:app --host 0.0.0.0 --port 8200
+#
+# If the service is down (or auto_transcribe is false), the system falls back to
+# batch transcription in transcribe.py — nothing breaks, it's just slower.
+auto_transcribe: true
+transcribe_api_host: 0.0.0.0
+transcribe_api_port: 8200
+# Backend: faster-whisper (CTranslate2, ~4x faster, lower memory; recommended on
+# GPU) or openai-whisper (PyTorch reference, matches the batch pipeline output).
+transcribe_provider: faster-whisper
+# Model size. If unset, falls back to whisper_model above.
+transcribe_model: base
+# Device: cuda | cpu | auto
+transcribe_device: cuda
+# faster-whisper compute type: float16 (GPU) or int8 (CPU). Ignored by openai-whisper.
+transcribe_compute_type: float16
+# Snippets shorter than this many ms are treated as non-speech blips and skipped
+# (both live and in the batch fallback).
+transcribe_min_ms: 400
 
 # Vector DB and RAG settings
 # Update these paths to match your OS (Windows: D:/path, Linux/macOS: /path or ./relative)
