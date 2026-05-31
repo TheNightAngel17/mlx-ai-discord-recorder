@@ -19,9 +19,13 @@ import sys
 import time
 from pathlib import Path
 
-import requests
 import yaml
 import chromadb
+from dotenv import load_dotenv
+
+# Allow importing providers.py from the sibling py-query directory
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "py-query"))
+from providers import get_embedding_provider  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -140,59 +144,21 @@ def chunk_segments(segments: list[dict], chunk_minutes: float) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Embedding via Ollama
-# ---------------------------------------------------------------------------
-
-def embed_text(text: str, ollama_base_url: str, embedding_model: str) -> list[float]:
-    """
-    Call the Ollama embeddings API and return the embedding vector.
-
-    POST <ollama_base_url>/api/embeddings
-    Body: {"model": "<model>", "prompt": "<text>"}
-    Response: {"embedding": [float, ...]}
-    """
-    url = f"{ollama_base_url.rstrip('/')}/api/embeddings"
-    try:
-        resp = requests.post(
-            url,
-            json={"model": embedding_model, "prompt": text},
-            timeout=60,
-        )
-        resp.raise_for_status()
-    except requests.exceptions.ConnectionError:
-        print(
-            f"\nError: Could not connect to Ollama at {ollama_base_url}. "
-            "Is Ollama running?",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-    except requests.exceptions.HTTPError as exc:
-        print(f"\nError: Ollama API returned an error: {exc}", file=sys.stderr)
-        sys.exit(1)
-    except requests.exceptions.Timeout:
-        print("\nError: Ollama API request timed out.", file=sys.stderr)
-        sys.exit(1)
-
-    data = resp.json()
-    if "embedding" not in data:
-        print(
-            f"\nError: Ollama response missing 'embedding' field: {data}",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-    return data["embedding"]
-
-
-# ---------------------------------------------------------------------------
 # ChromaDB helpers
 # ---------------------------------------------------------------------------
 
 COLLECTION_NAME = "dnd_sessions"
 
 
-def get_chroma_collection(vector_db_directory: str):
+def get_chroma_collection(vector_db_directory: str, reset: bool = False):
     """Return (or create) the persistent ChromaDB collection."""
     client = chromadb.PersistentClient(path=vector_db_directory)
+    if reset:
+        try:
+            client.delete_collection(COLLECTION_NAME)
+            print(f"Deleted existing ChromaDB collection '{COLLECTION_NAME}'.")
+        except Exception:
+            pass
     collection = client.get_or_create_collection(COLLECTION_NAME)
     return collection
 
@@ -218,8 +184,7 @@ def vectorize_session(
     session_name: str,
     session_dir: Path,
     collection,
-    ollama_base_url: str,
-    embedding_model: str,
+    embedding_provider,
     chunk_minutes: float,
     force: bool,
 ) -> None:
@@ -264,7 +229,7 @@ def vectorize_session(
         chunk_id = f"{session_name}__chunk_{idx:04d}"
         print(f"  Embedding chunk {idx + 1}/{len(chunks)}...", end=" ", flush=True)
         t0 = time.time()
-        embedding = embed_text(chunk["text"], ollama_base_url, embedding_model)
+        embedding = embedding_provider.embed(chunk["text"])
         elapsed = time.time() - t0
         print(f"done ({elapsed:.1f}s)")
 
@@ -281,12 +246,24 @@ def vectorize_session(
         )
 
     # Upsert all chunks in a single call
-    collection.upsert(
-        ids=ids,
-        embeddings=embeddings,
-        documents=documents,
-        metadatas=metadatas,
-    )
+    try:
+        collection.upsert(
+            ids=ids,
+            embeddings=embeddings,
+            documents=documents,
+            metadatas=metadatas,
+        )
+    except Exception as exc:
+        if "dimension" in str(exc).lower():
+            print(
+                f"\n  Error: Embedding dimension mismatch.\n"
+                "  The ChromaDB collection was built with a different provider/model.\n"
+                "  Re-run with --reset-collection to clear and rebuild the collection:\n"
+                "    python py-process/vectorize.py --all --force --reset-collection",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        raise
     print(f"  Stored {len(chunks)} chunks in ChromaDB collection '{COLLECTION_NAME}'.")
 
 
@@ -295,6 +272,8 @@ def vectorize_session(
 # ---------------------------------------------------------------------------
 
 def main():
+    load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+
     parser = argparse.ArgumentParser(
         description="Chunk, embed, and store session transcripts into a ChromaDB vector database."
     )
@@ -314,6 +293,14 @@ def main():
         action="store_true",
         help="Re-index a session even if it has already been vectorized.",
     )
+    parser.add_argument(
+        "--reset-collection",
+        action="store_true",
+        help=(
+            "Delete and recreate the ChromaDB collection before indexing. "
+            "Required when switching to an embedding provider with a different vector dimension."
+        ),
+    )
     args = parser.parse_args()
 
     # Load config
@@ -321,9 +308,9 @@ def main():
 
     output_dir = config.get("output_directory", "./recordings")
     vector_db_directory = config.get("vector_db_directory", "./vectordb")
+    embedding_provider_name = config.get("embedding_provider", "ollama")
     embedding_model = config.get("embedding_model", "nomic-embed-text")
     chunk_minutes = float(config.get("chunk_minutes", 3))
-    ollama_base_url = config.get("ollama_base_url", "http://localhost:11434")
 
     output_path = Path(output_dir)
 
@@ -342,13 +329,15 @@ def main():
         sessions = [args.session]
 
     print(f"Vector DB: {vector_db_directory}")
-    print(f"Embedding: {embedding_model} via {ollama_base_url}")
+    print(f"Embedding: {embedding_model} via {embedding_provider_name}")
     print(f"Chunk size: {chunk_minutes} minutes")
     print(f"Sessions:  {len(sessions)}")
     print()
 
+    embedding_provider = get_embedding_provider(config)
+
     # Open (or create) the ChromaDB collection once for all sessions
-    collection = get_chroma_collection(vector_db_directory)
+    collection = get_chroma_collection(vector_db_directory, reset=args.reset_collection)
 
     for session_name in sessions:
         session_dir = output_path / session_name
@@ -363,8 +352,7 @@ def main():
             session_name=session_name,
             session_dir=session_dir,
             collection=collection,
-            ollama_base_url=ollama_base_url,
-            embedding_model=embedding_model,
+            embedding_provider=embedding_provider,
             chunk_minutes=chunk_minutes,
             force=args.force,
         )

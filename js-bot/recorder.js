@@ -359,9 +359,10 @@ class Recorder {
     const outputDir = this.config.output_directory || "./recordings";
 
     // Save WAV files for all captured users
+    const sessionStartMs = this.startTime.getTime();
     const savePromises = [];
     for (const [userId, entry] of this.audioBuffers.entries()) {
-      const { username, opusStream, silencePad, fileStream, pcmPath } = entry;
+      const { username, opusStream, silencePad, fileStream, pcmPath, audioStartOffsetMs } = entry;
 
       savePromises.push(
         new Promise((resolve) => {
@@ -386,6 +387,17 @@ class Recorder {
                 const safeName = sanitiseName(username);
                 const wavPath = path.join(sessionDir, `${safeName}.wav`);
                 fs.writeFileSync(wavPath, buildWav(pcmData));
+                // Write per-user metadata so the Python pipeline can align
+                // Whisper timestamps to true session-relative time.
+                const metaPath = path.join(sessionDir, `${safeName}.metadata.json`);
+                fs.writeFileSync(
+                  metaPath,
+                  JSON.stringify(
+                    { session_start_ms: sessionStartMs, audio_start_offset_ms: audioStartOffsetMs },
+                    null,
+                    2
+                  )
+                );
                 fs.unlinkSync(pcmPath); // clean up temp PCM
                 this.logger.info(
                   `Saved recording for ${username} -> ${wavPath}`
@@ -587,6 +599,11 @@ class Recorder {
     // session start. This ensures all per-user files stay in sync.
     const silencePad = new SilencePadTransform(this.startTime.getTime());
 
+    // Record how far into the session this user's audio subscription began.
+    // Stored in the per-user metadata JSON so the Python pipeline can use it
+    // as an authoritative baseline when aligning Whisper transcript timestamps.
+    const audioStartOffsetMs = Date.now() - this.startTime.getTime();
+
     // Write PCM directly to a temp file to avoid in-memory buffering races
     const pcmPath = path.join(
       this.sessionDir,
@@ -600,7 +617,7 @@ class Recorder {
       this.logger.warn(`Opus decoder error for ${username}: ${err.message}`);
     });
 
-    const entry = { username, opusStream, decoder, silencePad, fileStream, pcmPath };
+    const entry = { username, opusStream, decoder, silencePad, fileStream, pcmPath, audioStartOffsetMs };
     this.audioBuffers.set(userId, entry);
 
     this.logger.info(`Subscribed to audio for ${username} (${userId})`);

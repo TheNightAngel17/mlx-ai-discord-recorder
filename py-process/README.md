@@ -28,14 +28,18 @@ The Python audio processing pipeline that handles transcription, audio merging, 
 
 ## Overview
 
-The `js-bot/` records per-user WAV files into timestamped session folders:
+The `js-bot/` records per-user WAV files and metadata into timestamped session folders:
 
 ```
 recordings/
 └── 20260330_143000_Campaign1_Session4/
-    ├── thenightangel17.wav       # per-user recording
+    ├── thenightangel17.wav               # per-user recording
+    ├── thenightangel17.metadata.json     # per-user timing metadata
     └── playerone.wav
+    └── playerone.metadata.json
 ```
+
+The `.metadata.json` files are written by the JS recorder alongside each WAV.  They contain the absolute session start time and the per-user audio subscription offset, which `transcribe.py` uses to correct Whisper timestamp drift for mid-session joiners.
 
 This pipeline processes those recordings through four stages:
 
@@ -169,8 +173,8 @@ Transcribes each per-user WAV file using [OpenAI Whisper](https://github.com/ope
 
 #### Output Files
 
-- `<username>.txt` — Per-user transcript with `[HH:MM:SS.mmm --> HH:MM:SS.mmm]` timestamps
-- `_combined_transcript.txt` — All users merged and sorted by timestamp
+- `<username>.txt` — Per-user transcript with `[HH:MM:SS.mmm --> HH:MM:SS.mmm]` session-relative timestamps; includes a `# Joined session at:` header line for mid-session joiners
+- `_combined_transcript.txt` — All users merged and sorted chronologically; timestamps are clamped using `<username>.metadata.json` so no segment appears before the user actually joined
 
 #### Usage
 
@@ -458,7 +462,7 @@ All configuration is in the root `config.yaml`. The fields relevant to `py-proce
 | `mp3_bitrate` | `"128k"` | MP3 compression bitrate |
 | `keep_wav` | `true` | Keep original WAV files after MP3 export |
 | `vector_db_directory` | `./vectordb` | ChromaDB persistence directory |
-| `embedding_provider` | `ollama` | Embedding backend: `ollama` or `openai` |
+| `embedding_provider` | `ollama` | Embedding backend: `ollama`, `openai`, or `voyage` |
 | `embedding_model` | `nomic-embed-text` | Embedding model name |
 | `chunk_minutes` | `3` | Time-window for transcript chunking (minutes) |
 | `chat_provider` | `ollama` | Chat LLM backend: `ollama`, `openai`, or `anthropic` |
@@ -490,7 +494,9 @@ After a full pipeline run, the session folder contains:
 recordings/
 └── 20260330_143000_Campaign1_Session4/
     ├── thenightangel17.wav              # Per-user recording (kept if keep_wav: true)
+    ├── thenightangel17.metadata.json    # Per-user timing metadata (session_start_ms, audio_start_offset_ms)
     ├── playerone.wav
+    ├── playerone.metadata.json
     ├── thenightangel17.txt              # Per-user Whisper transcript
     ├── playerone.txt
     ├── _combined_transcript.txt         # All users merged chronologically

@@ -32,7 +32,7 @@ The primary interface is the **FastAPI HTTP service** (`app.py`), which keeps Ch
 
 **How it works:**
 
-1. **Embeds your question** using the configured embedding provider (Ollama or OpenAI)
+1. **Embeds your question** using the configured embedding provider (Ollama, OpenAI, or Voyage)
 2. **Retrieves the top-k most relevant transcript chunks** from ChromaDB
 3. **Generates an answer** using a configurable chat provider (Ollama, OpenAI, or Anthropic), grounded in the retrieved context
 4. **Returns the answer** and, optionally, the source chunks with session name, timestamps, speakers, and similarity score
@@ -53,6 +53,7 @@ The primary interface is the **FastAPI HTTP service** (`app.py`), which keeps Ch
     ```
   - **OpenAI** — Set `OPENAI_API_KEY` in your `.env` file
   - **Anthropic** — Set `ANTHROPIC_API_KEY` in your `.env` file
+  - **Voyage AI** — Set `VOYAGE_API_KEY` in your `.env` file
 
 ---
 
@@ -81,7 +82,7 @@ All settings are in the root `config.yaml`. The fields relevant to `py-query`:
 | Key | Default | Description |
 |-----|---------|-------------|
 | `vector_db_directory` | `./vectordb` | Must match the path used by `vectorize.py` |
-| `embedding_provider` | `ollama` | Embedding backend: `ollama` or `openai` |
+| `embedding_provider` | `ollama` | Embedding backend: `ollama`, `openai`, or `voyage` |
 | `embedding_model` | `nomic-embed-text` | Model name for the embedding provider |
 | `chat_provider` | `ollama` | Chat backend: `ollama`, `openai`, or `anthropic` |
 | `chat_model` | `llama3.2` | Model name for the chat provider |
@@ -96,9 +97,10 @@ Cloud provider API keys go in the root `.env` file — **never** in `config.yaml
 ```dotenv
 OPENAI_API_KEY=sk-...
 ANTHROPIC_API_KEY=sk-ant-...
+VOYAGE_API_KEY=pa-...
 ```
 
-> ⚠️ **Warning:** The `embedding_provider` and `embedding_model` used at query time **must match** what was used when sessions were vectorized. If you change these, re-run `python py-process/vectorize.py --all --force`.
+> ⚠️ **Warning:** The `embedding_provider` and `embedding_model` used at query time **must match** what was used when sessions were vectorized. If you change these, re-run `python py-process/vectorize.py --all --force --reset-collection`.
 
 ---
 
@@ -292,13 +294,16 @@ python query.py "Describe the final boss fight" --top-k 10 --show-sources
 | `openai` | `openai` | Fully cloud-based |
 | `openai` | `anthropic` | OpenAI embeddings, Claude for answers |
 | `openai` | `ollama` | Cloud embeddings, local chat |
+| `voyage` | `ollama` | Voyage embeddings, local chat |
+| `voyage` | `openai` | Voyage embeddings, OpenAI chat |
+| `voyage` | `anthropic` | Voyage embeddings, Claude for answers |
 | `anthropic` | _any_ | ❌ **Not supported** — Anthropic has no embedding API |
 
 ### How Providers Work
 
 The provider abstraction layer (`providers.py`) uses a simple factory pattern:
 
-- `get_embedding_provider(config)` → returns an `EmbeddingProvider` instance (Ollama or OpenAI)
+- `get_embedding_provider(config)` → returns an `EmbeddingProvider` instance (Ollama, OpenAI, or Voyage)
 - `get_chat_provider(config)` → returns a `ChatProvider` instance (Ollama, OpenAI, or Anthropic)
 
 All providers use raw HTTP requests via the `requests` library — no vendor SDKs required.

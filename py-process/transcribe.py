@@ -12,6 +12,7 @@ Examples:
 """
 
 import argparse
+import json
 import os
 import sys
 import time
@@ -40,8 +41,15 @@ def format_timestamp(seconds: float) -> str:
 
 
 def transcribe_wav(model: whisper.Whisper, wav_path: Path, language: str | None) -> dict:
-    """Run Whisper transcription on a single WAV file."""
-    options = {}
+    """Run Whisper transcription on a single WAV file.
+
+    word_timestamps=True is always enabled so that each segment's end time
+    reflects the last word spoken rather than the next silence boundary.  This
+    prevents Whisper's VAD padding from stretching a segment well past when the
+    speaker actually stopped, which otherwise corrupts conversational ordering
+    in the combined transcript.
+    """
+    options: dict = {"word_timestamps": True}
     if language:
         options["language"] = language
 
@@ -49,15 +57,67 @@ def transcribe_wav(model: whisper.Whisper, wav_path: Path, language: str | None)
     return result
 
 
-def write_transcript(username: str, result: dict, output_path: Path) -> None:
-    """Write a per-user transcript .txt file with timestamps."""
+def _seg_end(seg: dict) -> float:
+    """Return the tightest available end timestamp for a Whisper segment.
+
+    When word_timestamps=True the segment carries a 'words' list; the last
+    word's end time is used because it marks when speech actually stopped.
+    Falls back to seg['end'] (the VAD-padded boundary) when words are absent.
+    """
+    words = seg.get("words")
+    if words:
+        return words[-1]["end"]
+    return seg["end"]
+
+
+def load_user_metadata(wav_path: Path) -> dict:
+    """
+    Load the per-user metadata JSON written by the JS recorder alongside the WAV.
+
+    Returns a dict with at least these keys (all values default to 0 when the
+    file is absent or malformed):
+        session_start_ms      — absolute Unix timestamp (ms) when the session started.
+        audio_start_offset_ms — ms from session start to when this user was subscribed;
+                                equals 0 for users present from the beginning, and a
+                                positive value for mid-session joiners.
+    """
+    meta_path = wav_path.with_suffix(".metadata.json")
+    if not meta_path.exists():
+        return {"session_start_ms": 0, "audio_start_offset_ms": 0}
+    try:
+        with open(meta_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return {
+            "session_start_ms": int(data.get("session_start_ms", 0)),
+            "audio_start_offset_ms": int(data.get("audio_start_offset_ms", 0)),
+        }
+    except (json.JSONDecodeError, OSError, ValueError) as exc:
+        print(f"Warning: could not read {meta_path}: {exc}", file=sys.stderr)
+        return {"session_start_ms": 0, "audio_start_offset_ms": 0}
+
+
+def write_transcript(username: str, result: dict, output_path: Path, join_offset_s: float = 0.0) -> None:
+    """
+    Write a per-user transcript .txt file with session-relative timestamps.
+
+    Args:
+        username: The sanitised Discord username.
+        result: The Whisper transcription result dict.
+        output_path: Destination .txt file path.
+        join_offset_s: Seconds from session start when this user's audio began.
+                       Used only in the header comment; timestamps come from
+                       the silence-padded WAV and are already session-relative.
+    """
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(f"# Transcript for {username}\n")
-        f.write(f"# Detected language: {result.get('language', 'unknown')}\n\n")
+        f.write(f"# Detected language: {result.get('language', 'unknown')}\n")
+        if join_offset_s > 0.0:
+            f.write(f"# Joined session at: {format_timestamp(join_offset_s)}\n")
+        f.write("\n")
 
         for segment in result.get("segments", []):
             start = format_timestamp(segment["start"])
-            end = format_timestamp(segment["end"])
+            end = format_timestamp(_seg_end(segment))
             text = segment["text"].strip()
             f.write(f"[{start} --> {end}]  {text}\n")
 
@@ -123,6 +183,7 @@ def main():
 
     # Transcribe each user's WAV (cache results for reuse in combined transcript)
     results_by_user: dict[str, dict] = {}
+    metadata_by_user: dict[str, dict] = {}
     for wav_path in wav_files:
         username = wav_path.stem  # filename without extension = sanitised username
         print(f"Transcribing {username}...", end=" ", flush=True)
@@ -132,32 +193,67 @@ def main():
         elapsed = time.time() - t0
 
         results_by_user[username] = result
+        metadata_by_user[username] = load_user_metadata(wav_path)
 
         # Write per-user transcript
+        join_offset_s = metadata_by_user[username]["audio_start_offset_ms"] / 1000.0
         txt_path = session_dir / f"{username}.txt"
-        write_transcript(username, result, txt_path)
+        write_transcript(username, result, txt_path, join_offset_s)
 
         segment_count = len(result.get("segments", []))
         detected_lang = result.get("language", "?")
         print(f"done ({elapsed:.1f}s, {segment_count} segments, lang={detected_lang})")
         print(f"  -> {txt_path}")
 
-    # Write a combined transcript with all users merged by timestamp
+    # Write a combined transcript with all users merged by timestamp.
+    # The per-user WAVs are silence-padded to session zero by the JS recorder,
+    # so Whisper timestamps are already session-relative.  However, Whisper can
+    # drift on very long silent sections, occasionally placing a segment
+    # slightly before the user actually joined.  We use audio_start_offset_ms
+    # from the metadata as an authoritative lower bound: no segment can start
+    # before the user was subscribed.
     all_segments = []
     for username, result in results_by_user.items():
+        join_offset_s = metadata_by_user[username]["audio_start_offset_ms"] / 1000.0
+
+        # Insert a join-event marker so the transcript records exactly when
+        # each participant entered the session.
+        all_segments.append(
+            {
+                "username": username,
+                "start": join_offset_s,
+                "end": join_offset_s,
+                "text": "*** joined the session ***",
+            }
+        )
+
         for seg in result.get("segments", []):
+            # Clamp timestamps to the user's authoritative join time so that
+            # Whisper timing drift never places speech before the user joined.
+            # Skip the segment entirely if it ends before the join time — those
+            # are Whisper artefacts in the leading silence.
+            tight_end = _seg_end(seg)
+            if tight_end < join_offset_s:
+                continue
+            clamped_start = max(seg["start"], join_offset_s)
+            clamped_end = max(tight_end, join_offset_s)
             all_segments.append(
                 {
                     "username": username,
-                    "start": seg["start"],
-                    "end": seg["end"],
+                    "start": clamped_start,
+                    "end": clamped_end,
                     "text": seg["text"].strip(),
                 }
             )
 
-    # Sort chronologically: primary key is end time, secondary key is start time.
-    # This handles overlapping segments from multiple speakers correctly.
-    all_segments.sort(key=lambda s: (s["end"], s["start"]))
+    # Sort chronologically: primary key is start time, secondary key is end time.
+    # Using start as the primary key preserves conversational order — whoever
+    # began speaking first appears first, even if their segment overlaps and
+    # ends later than a following segment.
+    # Join markers have end == start, so their sort key is (t, t); any speech
+    # starting at the same moment has (t, t+N) which sorts after, keeping the
+    # join marker pinned before the user's first line.
+    all_segments.sort(key=lambda s: (s["start"], s["end"]))
 
     combined_path = session_dir / "_combined_transcript.txt"
     with open(combined_path, "w", encoding="utf-8") as f:

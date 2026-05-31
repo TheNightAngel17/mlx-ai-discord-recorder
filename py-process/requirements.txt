@@ -7,4 +7,5 @@ pydub>=0.25.1               # Audio mixing and MP3 compression (requires ffmpeg)
 
 # Vectorization (vectorize.py)
 chromadb>=0.5.0             # Local persistent vector database
-requests>=2.31.0            # HTTP client for Ollama embedding API calls
+requests>=2.31.0            # HTTP client for embedding API calls
+python-dotenv>=1.0.0        # Load API keys from .env

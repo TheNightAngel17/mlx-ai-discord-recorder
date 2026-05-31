@@ -3,15 +3,16 @@
 providers.py — Provider abstraction layer for embeddings and chat completions.
 
 Supports multiple LLM backends via a common interface:
-  - Embedding: ollama, openai
+  - Embedding: ollama, openai, voyage
   - Chat:      ollama, openai, anthropic
 
 NOTE: Anthropic does NOT offer an embedding API. If embedding_provider is set
-to 'anthropic', a clear error is raised. Use 'ollama' or 'openai' for embeddings.
+to 'anthropic', a clear error is raised. Use 'ollama', 'openai', or 'voyage' for embeddings.
 
 API keys for cloud providers are loaded from environment variables (set via .env):
   OPENAI_API_KEY     — required when using openai embedding or chat provider
   ANTHROPIC_API_KEY  — required when using anthropic chat provider
+  VOYAGE_API_KEY     — required when using voyage embedding provider
 """
 
 import os
@@ -121,6 +122,48 @@ class OpenAIEmbedding(EmbeddingProvider):
         except (KeyError, IndexError):
             print(
                 f"Error: Unexpected response from OpenAI embeddings API: {data}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+
+class VoyageAIEmbedding(EmbeddingProvider):
+    """Embedding via the Voyage AI embeddings API."""
+
+    _API_URL = "https://api.voyageai.com/v1/embeddings"
+
+    def __init__(self, model: str, api_key: str):
+        self.model = model
+        self.api_key = api_key
+
+    def embed(self, text: str) -> list[float]:
+        try:
+            resp = requests.post(
+                self._API_URL,
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={"model": self.model, "input": [text]},
+                timeout=60,
+            )
+            resp.raise_for_status()
+        except requests.exceptions.ConnectionError:
+            print("Error: Could not connect to Voyage AI API.", file=sys.stderr)
+            sys.exit(1)
+        except requests.exceptions.HTTPError as exc:
+            print(f"Error: Voyage AI embeddings API returned an error: {exc}", file=sys.stderr)
+            sys.exit(1)
+        except requests.exceptions.Timeout:
+            print("Error: Voyage AI embeddings API request timed out.", file=sys.stderr)
+            sys.exit(1)
+
+        data = resp.json()
+        try:
+            return data["data"][0]["embedding"]
+        except (KeyError, IndexError):
+            print(
+                f"Error: Unexpected response from Voyage AI embeddings API: {data}",
                 file=sys.stderr,
             )
             sys.exit(1)
@@ -284,11 +327,11 @@ def get_embedding_provider(config: dict) -> EmbeddingProvider:
     Instantiate and return the configured embedding provider.
 
     Reads `embedding_provider` from config (default: 'ollama').
-    Supported values: 'ollama', 'openai'
+    Supported values: 'ollama', 'openai', 'voyage'
 
     NOTE: Anthropic does not offer an embedding API. Attempting to use
     'anthropic' as the embedding provider will raise an error. Use
-    'ollama' or 'openai' for embeddings.
+    'ollama', 'openai', or 'voyage' for embeddings.
     """
     provider = config.get("embedding_provider", "ollama").lower()
     model = config.get("embedding_model", "nomic-embed-text")
@@ -308,17 +351,28 @@ def get_embedding_provider(config: dict) -> EmbeddingProvider:
             sys.exit(1)
         return OpenAIEmbedding(model=model, api_key=api_key)
 
+    if provider == "voyage":
+        api_key = os.environ.get("VOYAGE_API_KEY", "")
+        if not api_key:
+            print(
+                "Error: VOYAGE_API_KEY environment variable is not set. "
+                "Add it to your .env file.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        return VoyageAIEmbedding(model=model, api_key=api_key)
+
     if provider == "anthropic":
         print(
             "Error: Anthropic does not offer an embedding API. "
-            "Use 'ollama' or 'openai' for embeddings (set embedding_provider in config.yaml).",
+            "Use 'ollama', 'openai', or 'voyage' for embeddings (set embedding_provider in config.yaml).",
             file=sys.stderr,
         )
         sys.exit(1)
 
     print(
         f"Error: Unknown embedding_provider '{provider}'. "
-        "Supported values: ollama, openai",
+        "Supported values: ollama, openai, voyage",
         file=sys.stderr,
     )
     sys.exit(1)
