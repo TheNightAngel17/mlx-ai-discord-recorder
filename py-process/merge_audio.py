@@ -205,7 +205,9 @@ def main():
     export_mp3(mix, mix_mp3_path, mp3_bitrate)
     print("done")
 
-    # Honour keep_wav: clean up snippet WAVs (and empty sub-folders) when off.
+    # Honour keep_wav: clean up snippet WAVs, their transcription sidecars, and
+    # now-empty sub-folders when off. The combined transcript has already been
+    # assembled from the sidecars by this point, so they're safe to remove.
     if not keep_wav:
         removed = 0
         for username, snips in users:
@@ -215,6 +217,12 @@ def main():
                     removed += 1
                 except OSError as exc:
                     print(f"  Could not delete {wav_path}: {exc}", file=sys.stderr)
+                sidecar = wav_path.with_suffix(".json")
+                if sidecar.exists():
+                    try:
+                        sidecar.unlink()
+                    except OSError:
+                        pass
             try:
                 (session_dir / username).rmdir()
             except OSError:

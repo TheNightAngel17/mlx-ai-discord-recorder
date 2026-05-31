@@ -23,6 +23,52 @@ import subprocess
 import sys
 from pathlib import Path
 
+import requests
+import yaml
+
+
+def load_config() -> dict:
+    """Load config.yaml from the repo root (one level up from py-process/)."""
+    config_path = Path(__file__).resolve().parent.parent / "config.yaml"
+    if not config_path.exists():
+        print(f"Error: config.yaml not found at {config_path}", file=sys.stderr)
+        sys.exit(1)
+    with open(config_path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
+def finalize_live_transcription(session: str, config: dict) -> None:
+    """Drain the live transcription service's queue for this session.
+
+    When `auto_transcribe` is on, snippets were transcribed during the session
+    by py-transcribe; this waits until that service has written every sidecar so
+    the transcribe step can assemble instantly. If the service is unreachable we
+    log and continue — transcribe.py then batch-transcribes any missing snippets.
+    """
+    if not config.get("auto_transcribe"):
+        return
+
+    port = config.get("transcribe_api_port", 8200)
+    url = f"http://localhost:{port}/api/session/finalize"
+    try:
+        resp = requests.post(url, json={"session": session}, timeout=900)
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("drained"):
+            print(f"Live transcription drained for session '{session}'.")
+        else:
+            print(
+                f"Warning: live transcription did not fully drain "
+                f"({data.get('remaining')} snippet(s) left); transcribe.py will fill gaps.",
+                file=sys.stderr,
+            )
+    except requests.exceptions.RequestException as exc:
+        print(
+            f"Warning: could not reach the transcription service ({exc}). "
+            "transcribe.py will transcribe snippets in batch instead.",
+            file=sys.stderr,
+        )
+
 
 def run_step(label: str, command: list[str]) -> None:
     """Run a post-processing step as a subprocess. Exit on failure."""
@@ -65,6 +111,8 @@ def main():
     )
     args = parser.parse_args()
 
+    config = load_config()
+
     # Resolve paths to sibling scripts (same directory as this script)
     script_dir = Path(__file__).resolve().parent
     transcribe_script = script_dir / "transcribe.py"
@@ -75,6 +123,10 @@ def main():
     # -------------------------------------------------------------------
     # Step 1: Transcription
     # -------------------------------------------------------------------
+    # If snippets were transcribed live, wait for that queue to drain so every
+    # sidecar exists before transcribe.py assembles the combined transcript.
+    finalize_live_transcription(args.session, config)
+
     transcribe_cmd = [sys.executable, str(transcribe_script), args.session]
     if args.model:
         transcribe_cmd += ["--model", args.model]

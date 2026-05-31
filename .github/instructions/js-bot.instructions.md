@@ -48,6 +48,7 @@ Use the `makeLogger(module)` factory from `bot.js`. Format: `YYYY-MM-DD HH:MM:SS
 - **Spawned processes inherit `process.env`.** This is intentional (API keys flow to Python). Never pass secrets as CLI arguments — they'd appear in `ps` output.
 - **Per-utterance snippets, not silence-padded tracks.** `recorder.js` records each user's speech as discrete snippet WAVs in a per-user sub-folder (`<session>/<username>/<offset_ms>.wav`), where the filename is the snippet's session-relative start offset in ms. Timing alignment comes from that offset, not from in-file silence padding — do **not** reintroduce a `SilencePadTransform`.
 - **`EndBehaviorType.AfterSilence` is the segmentation mechanism.** Each utterance is subscribed with `AfterSilence` + `duration: snippet_silence_ms` (config-driven). The silence window doubles as the back-pad for Discord's early "stopped talking" signal. Keep the per-utterance capture logic isolated (`_startUtterance`) so the strategy can be swapped if needed.
+- **Live transcription is fire-and-forget.** When `auto_transcribe` is on, the recorder POSTs each finished snippet to the py-transcribe service (`_enqueueSnippet`). Never `await` it in the capture path — a slow or down service must not block recording. Failures are logged and ignored; the batch fallback in `py-process/transcribe.py` covers them.
 
 ## Common Pitfalls
 

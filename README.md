@@ -29,6 +29,7 @@ A Discord bot that records voice channel audio, transcribes it with [OpenAI Whis
 - 💬 **Text-channel announcements** — configurable channel for start/stop notifications
 - 🎵 **Audio merge** — mix all per-user WAVs into a single combined MP3
 - 📝 **Whisper transcription** — per-user and combined transcripts with timestamps
+- ⚡ **Live transcription (optional)** — a warm-model Whisper service transcribes each utterance as it's recorded, so the transcript is ready almost instantly when the session ends
 - 🧠 **Vector embeddings** — chunk and embed transcripts into ChromaDB
 - 📋 **Automatic session summaries** — LLM-generated narrative summaries with key moments, NPCs, and locations posted to Discord
 - 🔍 **RAG query** — ask natural-language questions about your sessions via Discord or CLI
@@ -42,8 +43,11 @@ A Discord bot that records voice channel audio, transcribes it with [OpenAI Whis
 ┌─────────────────────────────────────────────────────────────────┐
 │                     Discord Server                              │
 │   Voice Channel ──► js-bot/ (Node.js)                           │
-│                       │  Records per-user WAV files              │
+│                       │  Records per-user utterance snippets     │
 │                       │  Registers /mlx-ai slash commands        │
+│                       │                                          │
+│                       ├─► py-transcribe/ (Python, optional)      │
+│                       │     Warm-model Whisper, live per utterance│
 │                       ▼                                          │
 │                   py-process/ (Python)                           │
 │                       │  Transcribes (Whisper)                   │
@@ -210,6 +214,7 @@ source .venv/bin/activate
 
 pip install -r py-process/requirements.txt
 pip install -r py-query/requirements.txt
+pip install -r py-transcribe/requirements.txt
 ```
 
 #### PowerShell
@@ -220,6 +225,7 @@ python -m venv .venv
 
 pip install -r py-process/requirements.txt
 pip install -r py-query/requirements.txt
+pip install -r py-transcribe/requirements.txt
 ```
 
 > **GPU Acceleration (recommended):** If you have an NVIDIA GPU, install CUDA-enabled PyTorch for significantly faster Whisper transcription. See the [py-process README](./py-process/README.md#gpu-acceleration-recommended) for instructions.
@@ -248,6 +254,13 @@ pip install -r py-query/requirements.txt
 | `keep_wav` | `true` | Keep original per-user WAV files after MP3 export |
 | `whisper_model` | `"base"` | Default Whisper model size (`tiny`, `base`, `small`, `medium`, `large`) |
 | `whisper_language` | `"en"` | Default language code, or `"auto"` for auto-detection |
+| `auto_transcribe` | `true` | Live-transcribe each utterance via the warm-model service (`py-transcribe`) |
+| `transcribe_api_port` | `8200` | Port the live transcription service listens on |
+| `transcribe_provider` | `faster-whisper` | Live backend: `faster-whisper` or `openai-whisper` |
+| `transcribe_model` | (= `whisper_model`) | Live model size (falls back to `whisper_model`) |
+| `transcribe_device` | `cuda` | Live transcription device: `cuda`, `cpu`, or `auto` |
+| `transcribe_compute_type` | `float16` | faster-whisper compute type (`int8` on CPU) |
+| `transcribe_min_ms` | `400` | Skip snippets shorter than this (likely non-speech) |
 | `vector_db_directory` | `./vectordb` | Where ChromaDB persists its data |
 | `chunk_minutes` | `3` | Time-window size (minutes) for chunking transcripts |
 | `embedding_provider` | `ollama` | Embedding backend: `ollama`, `openai`, or `voyage` |
@@ -276,7 +289,11 @@ After installation, start the RAG API service (required for `/mlx-ai ask` comman
 cd py-query
 uvicorn app:app --host 0.0.0.0 --port 8100
 
-# Terminal 2 — Discord bot
+# Terminal 2 — live transcription service (optional; needed for auto_transcribe)
+cd py-transcribe
+uvicorn app:app --host 0.0.0.0 --port 8200
+
+# Terminal 3 — Discord bot
 cd js-bot
 node bot.js
 ```
@@ -288,7 +305,11 @@ node bot.js
 cd py-query
 uvicorn app:app --host 0.0.0.0 --port 8100
 
-# Terminal 2 — Discord bot
+# Terminal 2 — live transcription service (optional; needed for auto_transcribe)
+cd py-transcribe
+uvicorn app:app --host 0.0.0.0 --port 8200
+
+# Terminal 3 — Discord bot
 cd js-bot
 node bot.js
 ```
@@ -395,6 +416,12 @@ mlx-ai-discord-recorder/
 │   ├── requirements.txt      # Python dependencies
 │   └── README.md             # Processing pipeline documentation
 │
+├── py-transcribe/            # Live transcription service (Python)
+│   ├── app.py                # FastAPI warm-model Whisper service (POST /api/transcribe, /api/session/finalize, GET /api/health)
+│   ├── providers.py          # Transcriber abstraction (faster-whisper, openai-whisper)
+│   ├── requirements.txt      # Python dependencies
+│   └── README.md             # Transcription service documentation
+│
 └── py-query/                 # RAG query service (Python)
     ├── app.py                # FastAPI always-on API server (POST /api/query, GET /api/sessions, GET /api/health)
     ├── query.py              # CLI entry point for one-off RAG queries
@@ -414,6 +441,7 @@ Each sub-project has its own detailed README with command references, dependency
 |-------------|-------------|---------------|
 | **js-bot/** | Discord bot — recording, slash commands, interaction routing | [js-bot/README.md](./js-bot/README.md) |
 | **py-process/** | Audio processing — transcription, merging, vectorization | [py-process/README.md](./py-process/README.md) |
+| **py-transcribe/** | Live warm-model transcription service (auto-transcribe) | [py-transcribe/README.md](./py-transcribe/README.md) |
 | **py-query/** | RAG query — ask questions about recorded sessions | [py-query/README.md](./py-query/README.md) |
 
 ---

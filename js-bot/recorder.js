@@ -108,6 +108,13 @@ class Recorder {
     this._tailPadMs =
       config.snippet_tail_pad_ms != null ? Number(config.snippet_tail_pad_ms) : 200;
 
+    // Live transcription: when enabled, each finished snippet is POSTed to the
+    // warm-model transcription service (py-transcribe) as it is recorded.
+    this._autoTranscribe = Boolean(config.auto_transcribe);
+    this._transcribePort = Number(config.transcribe_api_port) || 8200;
+    this._transcribeMinMs =
+      config.transcribe_min_ms != null ? Number(config.transcribe_min_ms) : 400;
+
     this.isRecording = false;
     /** @type {import('@discordjs/voice').VoiceConnection|null} */
     this.connection = null;
@@ -564,6 +571,11 @@ class Recorder {
         let pcm = Buffer.concat(chunks);
         if (pcm.length === 0) return; // nothing decodable — drop it
 
+        // Duration of captured speech, measured before tail padding — used to
+        // skip enqueuing sub-threshold blips for transcription.
+        const speechMs =
+          (pcm.length / (SAMPLE_RATE * CHANNELS * BYTES_PER_SAMPLE)) * 1000;
+
         // Append a short tail of silence so Whisper doesn't clip the last word.
         if (this._tailPadMs > 0) {
           const padBytes =
@@ -580,6 +592,12 @@ class Recorder {
         );
         fs.writeFileSync(wavPath, buildWav(pcm));
         entry.snippetCount += 1;
+
+        // Live transcription: hand the finished snippet to the warm-model
+        // service (fire-and-forget — must not block capture).
+        if (this._autoTranscribe && speechMs >= this._transcribeMinMs) {
+          this._enqueueSnippet(offsetMs, wavPath, entry);
+        }
       } catch (err) {
         this.logger.error(`Failed to save snippet for ${entry.username}: ${err.message}`);
       }
@@ -620,6 +638,44 @@ class Recorder {
 
     entry.active.add(utterance);
     opusStream.pipe(decoder);
+  }
+
+  /**
+   * Fire-and-forget POST of a finished snippet to the live transcription service
+   * (py-transcribe). Failures (e.g. the service isn't running) are logged and
+   * ignored — the snippet WAV stays on disk and the batch fallback in
+   * transcribe.py will transcribe it at post-process time.
+   *
+   * @param {number} offsetMs   Session-relative start offset of the snippet
+   * @param {string} wavPath    Path to the written snippet WAV
+   * @param {{dir: string, username: string}} entry
+   */
+  _enqueueSnippet(offsetMs, wavPath, entry) {
+    const url = `http://localhost:${this._transcribePort}/api/transcribe`;
+    const body = JSON.stringify({
+      session: this.sessionName,
+      username: path.basename(entry.dir),
+      offset_ms: offsetMs,
+      wav_path: path.resolve(wavPath),
+    });
+    fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body,
+      signal: AbortSignal.timeout(5000),
+    })
+      .then((res) => {
+        if (!res.ok) {
+          this.logger.warn(
+            `Transcription enqueue returned HTTP ${res.status} for ${path.basename(wavPath)}`
+          );
+        }
+      })
+      .catch((err) => {
+        this.logger.warn(
+          `Could not enqueue snippet for live transcription (is py-transcribe running?): ${err.message}`
+        );
+      });
   }
 
   /**

@@ -54,7 +54,7 @@ time for reference.
 
 This pipeline processes those recordings through four stages:
 
-1. **Transcribe** — Whisper speech-to-text on each snippet → per-user `.txt` files + merged `_combined_transcript.txt`
+1. **Transcribe** — assemble per-user `.txt` files + merged `_combined_transcript.txt` from each snippet. With `auto_transcribe` on, snippets were already transcribed live by [py-transcribe](../py-transcribe/README.md) (sidecars on disk); this step just drains the queue and assembles. Otherwise it batch-transcribes with Whisper.
 2. **Merge Audio** — Place snippets at their offsets and overlay all users → `_session_mix.wav` + `_session_mix.mp3`
 3. **Vectorize** — Chunk and embed the combined transcript → ChromaDB for RAG queries
 4. **Summarize** — LLM-generated structured summary → `_session_summary.json` + `_session_summary.md` (and ChromaDB chunks)
@@ -178,9 +178,21 @@ python process.py 20260330_143000_Campaign1_Session4 --model medium --language e
 
 ---
 
-### `transcribe.py` — Whisper Transcription
+### `transcribe.py` — Transcript Assembly (sidecar-aware)
 
-Transcribes every utterance snippet in each participant's sub-folder using [OpenAI Whisper](https://github.com/openai/whisper), adds each snippet's filename offset to Whisper's per-clip timestamps, then merges all segments into a chronological combined transcript. The Whisper model is loaded once and reused across all snippets.
+Assembles the session transcripts from each participant's utterance snippets,
+adding each snippet's filename offset so timestamps are session-relative, then
+merges all segments into a chronological combined transcript.
+
+Two sources of per-snippet text:
+
+- **Sidecars (fast path):** if the live transcription service ([py-transcribe](../py-transcribe/README.md))
+  already transcribed a snippet, a `<offset_ms>.json` sidecar sits next to the
+  WAV. Those are loaded directly. **When every snippet has a sidecar, Whisper is
+  never loaded** and assembly is near-instant.
+- **Batch fallback:** snippets without a sidecar are transcribed here with
+  [OpenAI Whisper](https://github.com/openai/whisper) (loaded once). Clips shorter
+  than `transcribe_min_ms` are skipped as non-speech blips.
 
 #### Output Files
 
@@ -507,6 +519,7 @@ recordings/
     ├── _session.metadata.json          # { session_start_ms, session_name }
     ├── thenightangel17/                 # Per-user snippet sub-folder (kept if keep_wav: true)
     │   ├── 0000000000.wav               #   utterance snippet, name = start offset (ms)
+    │   ├── 0000000000.json              #   live-transcription sidecar (when auto_transcribe is on)
     │   └── 0000012840.wav
     ├── playerone/
     │   └── 0000003120.wav

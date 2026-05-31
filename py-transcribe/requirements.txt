@@ -1,0 +1,15 @@
+# MLX AI Discord Recorder — Live Transcription Service
+#
+# Web service
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+PyYAML>=6.0
+python-dotenv>=1.0.0
+
+# Whisper backends (only the one set in `transcribe_provider` is loaded at runtime)
+faster-whisper>=1.0.0       # CTranslate2 backend — fast, low memory (recommended on GPU)
+openai-whisper>=20231117    # PyTorch reference backend (matches the batch pipeline)
+
+# NOTE: faster-whisper installs ctranslate2; openai-whisper installs torch.
+# For GPU (CUDA) acceleration, install the CUDA build of torch / the matching
+# cuDNN+CUDA runtime for ctranslate2 per their docs.
