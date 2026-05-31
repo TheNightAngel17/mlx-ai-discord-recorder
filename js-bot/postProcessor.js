@@ -12,6 +12,38 @@ const { spawn } = require("child_process");
 const path = require("path");
 const fs = require("fs");
 
+/**
+ * Count per-user snippet WAVs across a session's participant sub-folders.
+ *
+ * Recordings now live as timestamped snippets in <session>/<username>/*.wav,
+ * so a flat readdir of the session folder no longer sees them. Reserved
+ * underscore/dot-prefixed entries (session metadata, mix outputs) are ignored.
+ *
+ * @param {string} sessionDir
+ * @returns {number}
+ */
+function countSnippetWavs(sessionDir) {
+  let count = 0;
+  let entries;
+  try {
+    entries = fs.readdirSync(sessionDir, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    if (entry.name.startsWith("_") || entry.name.startsWith(".")) continue;
+    try {
+      for (const f of fs.readdirSync(path.join(sessionDir, entry.name))) {
+        if (f.endsWith(".wav")) count += 1;
+      }
+    } catch {
+      /* unreadable sub-folder — skip */
+    }
+  }
+  return count;
+}
+
 class PostProcessor {
   /**
    * @param {object} config   Parsed config.yaml object
@@ -63,13 +95,11 @@ class PostProcessor {
       return;
     }
 
-    // Check for WAV files
-    const wavFiles = fs
-      .readdirSync(sessionDir)
-      .filter((f) => f.endsWith(".wav"));
-    if (wavFiles.length === 0) {
+    // Check for snippet recordings (per-user sub-folders of timestamped WAVs)
+    const snippetCount = countSnippetWavs(sessionDir);
+    if (snippetCount === 0) {
       await interaction.reply({
-        content: `No .wav files found in session \`${sessionName}\``,
+        content: `No recordings found in session \`${sessionName}\``,
         ephemeral: true,
       });
       return;
@@ -82,7 +112,7 @@ class PostProcessor {
     this.currentSession = sessionName;
 
     this.logger.info(
-      `Post-processing started: session=${sessionName}, model=${model}, language=${language || "auto"}, files=${wavFiles.length}`
+      `Post-processing started: session=${sessionName}, model=${model}, language=${language || "auto"}, snippets=${snippetCount}`
     );
 
     // Resolve paths
@@ -112,7 +142,7 @@ class PostProcessor {
     const announceChannel = await this._getAnnounceChannel(interaction.guild);
     if (announceChannel && !silent) {
       await announceChannel.send(
-        `Post-processing started for session \`${sessionName}\` (model: ${model}, language: ${language || "auto-detect"}, ${wavFiles.length} file(s))`
+        `Post-processing started for session \`${sessionName}\` (model: ${model}, language: ${language || "auto-detect"}, ${snippetCount} snippet(s))`
       );
     }
 
@@ -257,13 +287,11 @@ class PostProcessor {
       return;
     }
 
-    // Check for WAV files
-    const wavFiles = fs
-      .readdirSync(sessionDir)
-      .filter((f) => f.endsWith(".wav"));
-    if (wavFiles.length === 0) {
+    // Check for snippet recordings (per-user sub-folders of timestamped WAVs)
+    const snippetCount = countSnippetWavs(sessionDir);
+    if (snippetCount === 0) {
       await interaction.followUp({
-        content: `❌ No .wav files found in session \`${sessionName}\``,
+        content: `❌ No recordings found in session \`${sessionName}\``,
         ephemeral: true,
       });
       return;
@@ -271,14 +299,14 @@ class PostProcessor {
 
     // Send a "starting" message to the channel so progress is visible
     const startMsg = await interaction.followUp({
-      content: `⏳ Post-processing started for session \`${sessionName}\` (model: ${model}, language: ${language || "auto-detect"}, ${wavFiles.length} file(s))…`,
+      content: `⏳ Post-processing started for session \`${sessionName}\` (model: ${model}, language: ${language || "auto-detect"}, ${snippetCount} snippet(s))…`,
     });
 
     this.isProcessing = true;
     this.currentSession = sessionName;
 
     this.logger.info(
-      `Post-processing started (button): session=${sessionName}, model=${model}, language=${language || "auto"}, files=${wavFiles.length}`
+      `Post-processing started (button): session=${sessionName}, model=${model}, language=${language || "auto"}, snippets=${snippetCount}`
     );
 
     // Resolve paths
@@ -443,12 +471,10 @@ class PostProcessor {
       return;
     }
 
-    const wavFiles = fs
-      .readdirSync(sessionDir)
-      .filter((f) => f.endsWith(".wav") && !f.startsWith("_"));
-    if (wavFiles.length === 0) {
+    const snippetCount = countSnippetWavs(sessionDir);
+    if (snippetCount === 0) {
       await interaction.reply({
-        content: `❌ No per-user .wav files found in session \`${sessionName}\``,
+        content: `❌ No per-user snippet recordings found in session \`${sessionName}\``,
         ephemeral: true,
       });
       return;
@@ -459,7 +485,7 @@ class PostProcessor {
     this.isMerging = true;
     this.mergeSession = sessionName;
 
-    this.logger.info(`Audio merge started: session=${sessionName}, files=${wavFiles.length}`);
+    this.logger.info(`Audio merge started: session=${sessionName}, snippets=${snippetCount}`);
 
     const repoRoot = path.resolve(__dirname, "..");
     const scriptPath = path.join(repoRoot, "py-process", "merge_audio.py");

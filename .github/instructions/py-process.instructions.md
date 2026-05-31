@@ -39,7 +39,7 @@ applyTo: "py-process/**"
 - **Spawned by the JS bot.** These scripts are invoked via `child_process.spawn()` from `js-bot/`. Do not assume they are run standalone by default.
 - **Use list arguments in `subprocess.run()`.** Never `shell=True` — this prevents shell injection.
 - **Single ChromaDB collection** (`dnd_sessions`). All sessions share one collection with metadata filtering — not one collection per session.
-- **`SilencePadTransform` alignment.** Per-user WAV files produced by `recorder.js` are time-padded so they align. Pipeline scripts must preserve this alignment when merging or splitting audio.
+- **Snippet layout & filename-encoded offsets.** `recorder.js` writes per-user utterance snippets to `<session>/<username>/<offset_ms>.wav`, where the filename is the snippet's session-relative start offset in milliseconds. Pipeline scripts derive all timing from that offset (add it to Whisper timestamps; place clips at it when mixing) — there is no in-file silence padding to preserve. Skip `_`/`.`-prefixed entries when scanning a session folder.
 
 ## Common Pitfalls
 

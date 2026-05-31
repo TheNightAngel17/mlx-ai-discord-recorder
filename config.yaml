@@ -12,7 +12,24 @@ announce_channel: "bot-commands"
 
 # Audio merge and compression settings
 mp3_bitrate: "128k"     # MP3 bitrate for compression (e.g. "64k", "128k", "192k", "320k")
-keep_wav: true           # Whether to keep original WAV files after MP3 conversion
+keep_wav: true           # Keep the per-user snippet WAVs after the session mix is exported.
+                         # Set false to delete snippets (and their sub-folders) once merge_audio.py finishes.
+
+# Recording / snippet settings
+# Each participant's speech is captured as discrete utterance snippets in a
+# per-user sub-folder: <session>/<username>/<offset_ms>.wav
+#
+# snippet_silence_ms: how long a user must be continuously silent before the
+#   current utterance snippet is closed. This window also acts as a "back-pad" —
+#   the stream stays open until the speaker is genuinely silent this long, so
+#   trailing words (which Discord can signal as "stopped" a touch early) are
+#   still captured. Tuning trade-off:
+#     too low  (e.g. 300)  -> sentences fragment across files; Whisper loses context
+#     too high (e.g. 3000) -> separate utterances merge into one long snippet
+snippet_silence_ms: 1000
+# snippet_tail_pad_ms: extra trailing silence appended to each snippet so Whisper
+#   has a short lead-out and doesn't clip the final word. Set 0 to disable.
+snippet_tail_pad_ms: 200
 
 # Whisper transcription defaults.
 # These are used when the /mlx-ai transcribe start command is run

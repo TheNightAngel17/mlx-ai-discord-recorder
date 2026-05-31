@@ -46,8 +46,8 @@ Use the `makeLogger(module)` factory from `bot.js`. Format: `YYYY-MM-DD HH:MM:SS
 - **JS bot, not Python bot.** py-cord does not support Discord's DAVE/E2EE protocol. `discord.js` + `@discordjs/voice` does. This is non-negotiable while Discord enforces DAVE.
 - **Spawn Python as child processes.** Call Python scripts via `child_process.spawn()` with argument arrays. Never use `exec()`, `execSync()`, or template-string shell commands.
 - **Spawned processes inherit `process.env`.** This is intentional (API keys flow to Python). Never pass secrets as CLI arguments — they'd appear in `ps` output.
-- **Silence padding must be preserved.** `SilencePadTransform` in `recorder.js` keeps per-user WAVs time-aligned. Removing it breaks multi-user transcript alignment.
-- **`EndBehaviorType.Manual` is required** for continuous recording. `AfterSilence` / `AfterInactivity` will stop streams prematurely during natural speech pauses.
+- **Per-utterance snippets, not silence-padded tracks.** `recorder.js` records each user's speech as discrete snippet WAVs in a per-user sub-folder (`<session>/<username>/<offset_ms>.wav`), where the filename is the snippet's session-relative start offset in ms. Timing alignment comes from that offset, not from in-file silence padding — do **not** reintroduce a `SilencePadTransform`.
+- **`EndBehaviorType.AfterSilence` is the segmentation mechanism.** Each utterance is subscribed with `AfterSilence` + `duration: snippet_silence_ms` (config-driven). The silence window doubles as the back-pad for Discord's early "stopped talking" signal. Keep the per-utterance capture logic isolated (`_startUtterance`) so the strategy can be swapped if needed.
 
 ## Common Pitfalls
 

@@ -28,23 +28,34 @@ The Python audio processing pipeline that handles transcription, audio merging, 
 
 ## Overview
 
-The `js-bot/` records per-user WAV files and metadata into timestamped session folders:
+The `js-bot/` records each participant's speech as discrete **utterance snippets**
+in a per-user sub-folder of a timestamped session folder:
 
 ```
 recordings/
 └── 20260330_143000_Campaign1_Session4/
-    ├── thenightangel17.wav               # per-user recording
-    ├── thenightangel17.metadata.json     # per-user timing metadata
-    └── playerone.wav
-    └── playerone.metadata.json
+    ├── _session.metadata.json           # { session_start_ms, session_name }
+    ├── thenightangel17/                  # one sub-folder per participant
+    │   ├── 0000000000.wav                # filename = session-relative start offset (ms)
+    │   ├── 0000012840.wav                # => 12.84s into the session
+    │   └── ...
+    └── playerone/
+        ├── 0000003120.wav
+        └── ...
 ```
 
-The `.metadata.json` files are written by the JS recorder alongside each WAV.  They contain the absolute session start time and the per-user audio subscription offset, which `transcribe.py` uses to correct Whisper timestamp drift for mid-session joiners.
+Each snippet covers a single utterance (the recorder closes a snippet after a
+short silence gap), and the filename is its zero-padded session-relative start
+offset in milliseconds. Because the offset is encoded in the filename,
+`transcribe.py` reconstructs session-relative timestamps exactly by adding the
+offset to Whisper's per-snippet timing — no silence padding and no drift
+correction needed. `_session.metadata.json` records the absolute session start
+time for reference.
 
 This pipeline processes those recordings through four stages:
 
-1. **Transcribe** — Whisper speech-to-text → per-user `.txt` files + merged `_combined_transcript.txt`
-2. **Merge Audio** — Overlay all per-user WAVs → `_session_mix.wav` + `_session_mix.mp3`
+1. **Transcribe** — Whisper speech-to-text on each snippet → per-user `.txt` files + merged `_combined_transcript.txt`
+2. **Merge Audio** — Place snippets at their offsets and overlay all users → `_session_mix.wav` + `_session_mix.mp3`
 3. **Vectorize** — Chunk and embed the combined transcript → ChromaDB for RAG queries
 4. **Summarize** — LLM-generated structured summary → `_session_summary.json` + `_session_summary.md` (and ChromaDB chunks)
 
@@ -169,12 +180,12 @@ python process.py 20260330_143000_Campaign1_Session4 --model medium --language e
 
 ### `transcribe.py` — Whisper Transcription
 
-Transcribes each per-user WAV file using [OpenAI Whisper](https://github.com/openai/whisper), then merges all segments into a chronological combined transcript.
+Transcribes every utterance snippet in each participant's sub-folder using [OpenAI Whisper](https://github.com/openai/whisper), adds each snippet's filename offset to Whisper's per-clip timestamps, then merges all segments into a chronological combined transcript. The Whisper model is loaded once and reused across all snippets.
 
 #### Output Files
 
-- `<username>.txt` — Per-user transcript with `[HH:MM:SS.mmm --> HH:MM:SS.mmm]` session-relative timestamps; includes a `# Joined session at:` header line for mid-session joiners
-- `_combined_transcript.txt` — All users merged and sorted chronologically; timestamps are clamped using `<username>.metadata.json` so no segment appears before the user actually joined
+- `<username>.txt` — Per-user transcript with `[HH:MM:SS.mmm --> HH:MM:SS.mmm]` session-relative timestamps; includes a `# First spoke at:` header line
+- `_combined_transcript.txt` — All users merged and sorted chronologically. Timestamps are session-relative by construction (each snippet's start offset comes from its filename), so no drift correction is needed; a `*** joined the session ***` marker records when each participant first spoke
 
 #### Usage
 
@@ -205,14 +216,14 @@ python transcribe.py 20260330_143000_Campaign1_Session4 --model base --language 
 
 ### `merge_audio.py` — Audio Mixing & Compression
 
-Overlays all per-user WAV files into a single combined recording, then exports as both WAV and compressed MP3.
+Reconstructs the session timeline from the per-user utterance snippets into a single combined recording, then exports as both WAV and compressed MP3.
 
 #### How It Works
 
-1. Loads every `<username>.wav` in the session directory (skips `_`-prefixed files)
-2. Mixes them together — all users start at time zero, matching the recording start
+1. Walks each participant's sub-folder and reads every snippet's start offset from its filename (skips `_`/`.`-prefixed entries)
+2. Rebuilds one full-length track per user by placing each snippet at its offset on a silent canvas (a user's own utterances never overlap), then overlays all user tracks — preserving silence where someone wasn't talking and overlap where people talked over each other
 3. Exports `_session_mix.wav` and `_session_mix.mp3`
-4. Optionally deletes original per-user WAVs (controlled by `keep_wav` in `config.yaml`)
+4. Optionally deletes the snippet WAVs and their now-empty sub-folders (controlled by `keep_wav` in `config.yaml`)
 
 #### Usage
 
@@ -241,7 +252,7 @@ python merge_audio.py 20260330_143000_Campaign1_Session4
 | Key | Default | Description |
 |-----|---------|-------------|
 | `mp3_bitrate` | `"128k"` | MP3 bitrate (e.g. `"64k"`, `"128k"`, `"192k"`, `"320k"`) |
-| `keep_wav` | `true` | Keep original per-user WAV files after export |
+| `keep_wav` | `true` | Keep the per-user snippet WAVs (and sub-folders) after the mix is exported |
 
 ---
 
@@ -493,14 +504,16 @@ After a full pipeline run, the session folder contains:
 ```
 recordings/
 └── 20260330_143000_Campaign1_Session4/
-    ├── thenightangel17.wav              # Per-user recording (kept if keep_wav: true)
-    ├── thenightangel17.metadata.json    # Per-user timing metadata (session_start_ms, audio_start_offset_ms)
-    ├── playerone.wav
-    ├── playerone.metadata.json
+    ├── _session.metadata.json          # { session_start_ms, session_name }
+    ├── thenightangel17/                 # Per-user snippet sub-folder (kept if keep_wav: true)
+    │   ├── 0000000000.wav               #   utterance snippet, name = start offset (ms)
+    │   └── 0000012840.wav
+    ├── playerone/
+    │   └── 0000003120.wav
     ├── thenightangel17.txt              # Per-user Whisper transcript
     ├── playerone.txt
     ├── _combined_transcript.txt         # All users merged chronologically
-    ├── _session_mix.wav                 # Combined WAV (all users mixed)
+    ├── _session_mix.wav                 # Combined WAV (snippets placed at their offsets, all users mixed)
     ├── _session_mix.mp3                 # Compressed combined audio
     ├── _session_summary.json            # Structured summary (narrative, key moments, entities)
     └── _session_summary.md              # Human-readable markdown summary
