@@ -41,13 +41,33 @@ def format_timestamp(seconds: float) -> str:
 
 
 def transcribe_wav(model: whisper.Whisper, wav_path: Path, language: str | None) -> dict:
-    """Run Whisper transcription on a single WAV file."""
-    options = {}
+    """Run Whisper transcription on a single WAV file.
+
+    word_timestamps=True is always enabled so that each segment's end time
+    reflects the last word spoken rather than the next silence boundary.  This
+    prevents Whisper's VAD padding from stretching a segment well past when the
+    speaker actually stopped, which otherwise corrupts conversational ordering
+    in the combined transcript.
+    """
+    options: dict = {"word_timestamps": True}
     if language:
         options["language"] = language
 
     result = model.transcribe(str(wav_path), **options)
     return result
+
+
+def _seg_end(seg: dict) -> float:
+    """Return the tightest available end timestamp for a Whisper segment.
+
+    When word_timestamps=True the segment carries a 'words' list; the last
+    word's end time is used because it marks when speech actually stopped.
+    Falls back to seg['end'] (the VAD-padded boundary) when words are absent.
+    """
+    words = seg.get("words")
+    if words:
+        return words[-1]["end"]
+    return seg["end"]
 
 
 def load_user_metadata(wav_path: Path) -> dict:
@@ -97,7 +117,7 @@ def write_transcript(username: str, result: dict, output_path: Path, join_offset
 
         for segment in result.get("segments", []):
             start = format_timestamp(segment["start"])
-            end = format_timestamp(segment["end"])
+            end = format_timestamp(_seg_end(segment))
             text = segment["text"].strip()
             f.write(f"[{start} --> {end}]  {text}\n")
 
@@ -212,10 +232,11 @@ def main():
             # Whisper timing drift never places speech before the user joined.
             # Skip the segment entirely if it ends before the join time — those
             # are Whisper artefacts in the leading silence.
-            if seg["end"] < join_offset_s:
+            tight_end = _seg_end(seg)
+            if tight_end < join_offset_s:
                 continue
             clamped_start = max(seg["start"], join_offset_s)
-            clamped_end = seg["end"]  # end is already >= join_offset_s
+            clamped_end = max(tight_end, join_offset_s)
             all_segments.append(
                 {
                     "username": username,
@@ -225,11 +246,14 @@ def main():
                 }
             )
 
-    # Sort chronologically: primary key is end time, secondary key is start time.
-    # This handles overlapping segments from multiple speakers correctly.
-    # Join markers have end == start, so they sort before any speech at the same
-    # timestamp (secondary sort keeps them stable relative to each other).
-    all_segments.sort(key=lambda s: (s["end"], s["start"]))
+    # Sort chronologically: primary key is start time, secondary key is end time.
+    # Using start as the primary key preserves conversational order — whoever
+    # began speaking first appears first, even if their segment overlaps and
+    # ends later than a following segment.
+    # Join markers have end == start, so their sort key is (t, t); any speech
+    # starting at the same moment has (t, t+N) which sorts after, keeping the
+    # join marker pinned before the user's first line.
+    all_segments.sort(key=lambda s: (s["start"], s["end"]))
 
     combined_path = session_dir / "_combined_transcript.txt"
     with open(combined_path, "w", encoding="utf-8") as f:
