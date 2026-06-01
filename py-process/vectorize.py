@@ -20,12 +20,13 @@ import time
 from pathlib import Path
 
 import yaml
-import chromadb
 from dotenv import load_dotenv
 
-# Allow importing providers.py from the sibling py-query directory
+# Allow importing providers.py and categories.py from the sibling py-query directory
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "py-query"))
 from providers import get_embedding_provider  # noqa: E402
+from categories import read_session_category, resolve_category  # noqa: E402
+from chroma_client import get_chroma_client  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -147,20 +148,33 @@ def chunk_segments(segments: list[dict], chunk_minutes: float) -> list[dict]:
 # ChromaDB helpers
 # ---------------------------------------------------------------------------
 
-COLLECTION_NAME = "dnd_sessions"
+class _CollectionPool:
+    """Lazily open (and optionally reset-once-per-run) ChromaDB collections by name.
 
+    A single run may touch several collections (one per category). Collections are
+    cached so each is opened once; with ``reset`` set, a collection is deleted and
+    recreated the first time it is requested in this run (never twice).
+    """
 
-def get_chroma_collection(vector_db_directory: str, reset: bool = False):
-    """Return (or create) the persistent ChromaDB collection."""
-    client = chromadb.PersistentClient(path=vector_db_directory)
-    if reset:
-        try:
-            client.delete_collection(COLLECTION_NAME)
-            print(f"Deleted existing ChromaDB collection '{COLLECTION_NAME}'.")
-        except Exception:
-            pass
-    collection = client.get_or_create_collection(COLLECTION_NAME)
-    return collection
+    def __init__(self, client, reset: bool = False):
+        self._client = client
+        self._reset = reset
+        self._reset_done: set[str] = set()
+        self._cache: dict = {}
+
+    def get(self, name: str):
+        if name in self._cache:
+            return self._cache[name]
+        if self._reset and name not in self._reset_done:
+            try:
+                self._client.delete_collection(name)
+                print(f"Deleted existing ChromaDB collection '{name}'.")
+            except Exception:
+                pass
+            self._reset_done.add(name)
+        collection = self._client.get_or_create_collection(name)
+        self._cache[name] = collection
+        return collection
 
 
 def session_is_vectorized(collection, session_name: str) -> bool:
@@ -187,6 +201,8 @@ def vectorize_session(
     embedding_provider,
     chunk_minutes: float,
     force: bool,
+    category: str = "dnd",
+    subcategory: str | None = None,
 ) -> None:
     """Chunk, embed, and store one session's combined transcript."""
 
@@ -239,6 +255,8 @@ def vectorize_session(
         metadatas.append(
             {
                 "session_name": session_name,
+                "category": category,
+                "subcategory": subcategory or "",
                 "start_time": chunk["start_time"],
                 "end_time": chunk["end_time"],
                 "speakers": ", ".join(chunk["speakers"]),
@@ -264,7 +282,7 @@ def vectorize_session(
             )
             sys.exit(1)
         raise
-    print(f"  Stored {len(chunks)} chunks in ChromaDB collection '{COLLECTION_NAME}'.")
+    print(f"  Stored {len(chunks)} chunks in ChromaDB collection '{collection.name}'.")
 
 
 # ---------------------------------------------------------------------------
@@ -336,8 +354,13 @@ def main():
 
     embedding_provider = get_embedding_provider(config)
 
-    # Open (or create) the ChromaDB collection once for all sessions
-    collection = get_chroma_collection(vector_db_directory, reset=args.reset_collection)
+    # One client per run; collections are opened lazily per category (each session
+    # resolves its collection from _session.metadata.json). --reset-collection resets
+    # only the collections actually touched by this run.
+    # In Docker, get_chroma_client returns an HttpClient pointing at the dedicated
+    # chromadb server container so the HNSW is always authoritative.
+    client = get_chroma_client(config)
+    pool = _CollectionPool(client, reset=args.reset_collection)
 
     for session_name in sessions:
         session_dir = output_path / session_name
@@ -347,7 +370,14 @@ def main():
                 sys.exit(1)
             continue
 
-        print(f"Session: {session_name}")
+        category_name, subcategory = read_session_category(session_dir)
+        category = resolve_category(config, category_name)
+        collection = pool.get(category["collection_name"])
+
+        print(
+            f"Session: {session_name}  "
+            f"(category: {category['category_name']}, collection: {category['collection_name']})"
+        )
         vectorize_session(
             session_name=session_name,
             session_dir=session_dir,
@@ -355,6 +385,8 @@ def main():
             embedding_provider=embedding_provider,
             chunk_minutes=chunk_minutes,
             force=args.force,
+            category=category["category_name"],
+            subcategory=subcategory,
         )
         print()
 

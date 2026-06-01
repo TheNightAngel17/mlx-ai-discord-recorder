@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
 """
-summarize.py — Generate structured session summaries using an LLM and store them in ChromaDB.
+summarize.py — Generate a session summary using an LLM and store it in ChromaDB.
 
-Reads _combined_transcript.txt for a session, sends it to the configured chat provider,
-and generates a structured summary with key moments, NPCs, locations, and items.
+Reads _combined_transcript.txt for a session, looks up the session's category (from
+_session.metadata.json), loads that category's summary prompt, sends the transcript to the
+configured chat provider, and writes the model's Markdown response straight to
+_session_summary.md.
 
-Outputs (written to the session folder):
-  _session_summary.json  — Structured data (narrative, key moments, entities)
-  _session_summary.md    — Human-readable markdown
+The summary format is fully controlled by the category's editable prompt (see
+categories/<name>.md), so different session styles (D&D, work meeting, event planning, …)
+produce different summaries. The summary text is also embedded as one chunk in the
+category's ChromaDB collection for cross-session RAG.
 
-Also stores the summary narrative and each key moment as ChromaDB chunks for
-improved cross-session RAG query quality.
-
-For long transcripts that exceed the configured ``summary_max_input_tokens`` limit, a
-map-reduce strategy is used: the transcript is split into chunks, each chunk is summarised
-independently (map), then all partial summaries are combined into a single final summary
-(reduce).  Short transcripts that fit within the limit use a single-pass approach.
+For long transcripts that exceed ``summary_max_input_tokens``, a map-reduce strategy is
+used: each chunk is reduced to concise Markdown notes (map), then all notes are combined
+into one final summary using the category prompt (reduce). Short transcripts use a single
+pass.
 
 Usage:
     python summarize.py <session_name>
@@ -27,7 +27,6 @@ Examples:
 """
 
 import argparse
-import json
 import logging
 import re
 import sys
@@ -37,14 +36,15 @@ from pathlib import Path
 import yaml
 
 # ---------------------------------------------------------------------------
-# Path bootstrap — allow importing providers.py from py-query/
+# Path bootstrap — allow importing providers.py / categories.py from py-query/
 # ---------------------------------------------------------------------------
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO_ROOT / "py-query"))
 
-import chromadb  # noqa: E402
 from providers import get_chat_provider, get_embedding_provider  # noqa: E402
+from categories import load_prompt, read_session_category, resolve_category  # noqa: E402
+from chroma_client import get_chroma_client  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -70,97 +70,22 @@ def load_config() -> dict:
 # transcript is large enough that results may be silently truncated by the model.
 _OLLAMA_CONTEXT_WARN_CHARS = 32_000   # ≈ 8K tokens at 4 chars/token
 
+# Map-phase instruction: turn one transcript section into concise notes. The final
+# formatting is applied by the category prompt during the reduce phase.
+_MAP_NOTES_INSTRUCTION = (
+    "You are summarizing ONE section of a longer session transcript. Produce concise "
+    "Markdown bullet notes capturing the key events, decisions, names, places, items, and "
+    "noteworthy moments in this section, including approximate timestamps where helpful. "
+    "Do not write a title or top-level headings — output only the bullet notes for this section."
+)
 
-# ---------------------------------------------------------------------------
-# System prompts
-# ---------------------------------------------------------------------------
-
-def _build_system_prompt(summary_max_tokens: int) -> str:
-    """
-    Build the system prompt for a full (single-pass or reduce) summarization request.
-
-    Args:
-        summary_max_tokens: Approximate token budget for the LLM response.
-    """
-    return f"""\
-You are a session chronicler for a tabletop role-playing game (TTRPG). You will be given a \
-full session transcript and must produce a structured JSON summary.
-
-Your response MUST be valid JSON (no markdown fences, no extra text) matching this schema exactly:
-
-{{
-  "narrative_summary": "<2-4 paragraph narrative summary of the session>",
-  "key_moments": [
-    {{
-      "timestamp": <float seconds from session start, or 0 if unknown>,
-      "description": "<one sentence description>",
-      "category": "<one of: combat, plot_reveal, npc_introduction, funny_moment, decision_point>",
-      "context": "<1-2 sentences of surrounding context>"
-    }}
-  ],
-  "npcs": [
-    {{"name": "<name>", "context": "<brief description>"}}
-  ],
-  "locations": [
-    {{"name": "<name>", "context": "<brief description>"}}
-  ],
-  "items": [
-    {{"name": "<name>", "context": "<brief description>"}}
-  ]
-}}
-
-Rules:
-- Aim to keep your total response under approximately {summary_max_tokens} tokens.
-- Include 3–10 key moments. Focus on the most impactful events.
-- Key moment categories: combat, plot_reveal, npc_introduction, funny_moment, decision_point
-- List only NPCs, locations, and items that were meaningfully discussed.
-- Timestamps: use the start time in seconds from the transcript line nearest to the event. \
-Use 0 if unknown.
-- Output ONLY the JSON object. Do not include markdown code fences or any other text.
-"""
-
-
-def _build_chunk_system_prompt() -> str:
-    """
-    Build the system prompt used in the **map** phase of map-reduce summarization.
-
-    Each transcript chunk is summarised independently with this prompt.  The resulting
-    partial summaries are later merged by a reduce call using _build_system_prompt().
-    """
-    return """\
-You are a session chronicler for a tabletop role-playing game (TTRPG). You will be given a \
-PARTIAL section of a longer session transcript and must produce a structured JSON partial summary.
-
-Your response MUST be valid JSON (no markdown fences, no extra text) matching this schema exactly:
-
-{
-  "partial_narrative": "<1-2 paragraph narrative summary of events in this section>",
-  "key_moments": [
-    {
-      "timestamp": <float seconds from session start, or 0 if unknown>,
-      "description": "<one sentence description>",
-      "category": "<one of: combat, plot_reveal, npc_introduction, funny_moment, decision_point>",
-      "context": "<1-2 sentences of surrounding context>"
-    }
-  ],
-  "npcs": [
-    {"name": "<name>", "context": "<brief description>"}
-  ],
-  "locations": [
-    {"name": "<name>", "context": "<brief description>"}
-  ],
-  "items": [
-    {"name": "<name>", "context": "<brief description>"}
-  ]
-}
-
-Rules:
-- Include up to 5 key moments from this section only. Focus on the most impactful events.
-- Key moment categories: combat, plot_reveal, npc_introduction, funny_moment, decision_point
-- List only NPCs, locations, and items that appear in this section.
-- Timestamps: use the start time in seconds from the transcript line nearest to the event.
-- Output ONLY the JSON object. Do not include markdown code fences or any other text.
-"""
+# Used only when a category's prompt file is missing on disk.
+_FALLBACK_PROMPT = (
+    "You are a session summarizer. Given a session transcript, produce a clear, "
+    "well-structured summary in GitHub-flavored Markdown. Begin with a top-level heading "
+    "naming the session, then a narrative overview, followed by the key points, decisions, "
+    "and notable moments. Output only the Markdown document — no code fences."
+)
 
 
 # ---------------------------------------------------------------------------
@@ -173,19 +98,9 @@ _LINE_RE = re.compile(
 )
 
 
-def _ts_to_seconds(ts: str) -> float:
-    """Convert HH:MM:SS.mmm timestamp string to seconds as a float."""
-    h, m, rest = ts.split(":")
-    s, ms = rest.split(".")
-    return int(h) * 3600 + int(m) * 60 + int(s) + int(ms) / 1000.0
-
-
 def read_transcript(path: Path) -> tuple[str, list[str]]:
     """
     Read _combined_transcript.txt and return the raw text and sorted list of speaker names.
-
-    Args:
-        path: Path to _combined_transcript.txt
 
     Returns:
         Tuple of (transcript_text, speakers) where transcript_text is the full file content
@@ -206,35 +121,22 @@ def read_transcript(path: Path) -> tuple[str, list[str]]:
 
 
 # ---------------------------------------------------------------------------
-# LLM response parsing helpers
+# LLM response helpers
 # ---------------------------------------------------------------------------
 
 def _strip_markdown_fences(raw: str) -> str:
-    """Strip accidental markdown code fences that some models add despite instructions."""
-    raw = raw.strip()
-    if raw.startswith("```"):
-        raw = re.sub(r"^```[a-zA-Z]*\n?", "", raw)
-        raw = re.sub(r"\n?```$", "", raw)
-        raw = raw.strip()
-    return raw
-
-
-def _parse_json_response(raw: str, context: str = "") -> dict:
     """
-    Parse an LLM JSON response, exiting with a descriptive error on failure.
+    Strip an outer ``` fence that some models wrap the whole Markdown document in.
 
-    Args:
-        raw:     Raw text returned by the LLM.
-        context: Optional description of where this response came from (for error messages).
+    Only removes a leading ```/```markdown line and the matching trailing ``` when the
+    entire response is wrapped — inline/code fences inside the summary are left intact.
     """
-    raw = _strip_markdown_fences(raw)
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError as exc:
-        label = f" ({context})" if context else ""
-        print(f"  Error: LLM returned invalid JSON{label}: {exc}", file=sys.stderr)
-        print(f"  Raw response (first 500 chars): {raw[:500]}", file=sys.stderr)
-        sys.exit(1)
+    text = (raw or "").strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```[a-zA-Z]*\n?", "", text)
+        text = re.sub(r"\n?```$", "", text)
+        text = text.strip()
+    return text
 
 
 # ---------------------------------------------------------------------------
@@ -245,10 +147,6 @@ def _chunk_transcript(text: str, max_chars: int) -> list[str]:
     """
     Split *text* into chunks of at most *max_chars* characters, splitting only on
     newline boundaries so that no transcript line is cut mid-sentence.
-
-    Args:
-        text:      Full transcript text.
-        max_chars: Maximum number of characters per chunk.
 
     Returns:
         List of non-empty chunk strings.
@@ -286,104 +184,69 @@ def _call_provider(provider, system_prompt: str, user_message: str) -> str:
     return provider.chat(system_prompt, user_message)
 
 
-def _map_chunk(
-    chunk: str,
-    chunk_idx: int,
-    total_chunks: int,
-    provider,
-) -> dict:
-    """
-    Summarise a single transcript chunk (map phase).
-
-    Args:
-        chunk:        Partial transcript text for this chunk.
-        chunk_idx:    0-based chunk index (for progress display).
-        total_chunks: Total number of chunks (for progress display).
-        provider:     Instantiated chat provider.
-
-    Returns:
-        Parsed partial summary dict (keys: partial_narrative, key_moments, npcs,
-        locations, items).
-    """
-    system_prompt = _build_chunk_system_prompt()
+def _map_chunk(chunk: str, chunk_idx: int, total_chunks: int, provider) -> str:
+    """Reduce a single transcript chunk to concise Markdown notes (map phase)."""
     print(
-        f"  Map chunk {chunk_idx + 1}/{total_chunks} "
-        f"({len(chunk):,} chars)…",
+        f"  Map chunk {chunk_idx + 1}/{total_chunks} ({len(chunk):,} chars)…",
         end=" ",
         flush=True,
     )
     t0 = time.time()
-    raw = _call_provider(provider, system_prompt, chunk)
-    elapsed = time.time() - t0
-    print(f"done ({elapsed:.1f}s)")
-    return _parse_json_response(raw, context=f"chunk {chunk_idx + 1}")
+    raw = _call_provider(provider, _MAP_NOTES_INSTRUCTION, chunk)
+    print(f"done ({time.time() - t0:.1f}s)")
+    return _strip_markdown_fences(raw)
 
 
-def _reduce_chunks(
-    partial_summaries: list[dict],
+def _reduce_notes(
+    notes: list[str],
     provider,
-    summary_max_tokens: int,
-) -> dict:
-    """
-    Combine all partial chunk summaries into a single final summary (reduce phase).
-
-    The partial summaries are serialised as JSON and fed back to the LLM with the
-    full structured output prompt so the result conforms to the final schema.
-
-    Args:
-        partial_summaries: List of dicts returned by _map_chunk().
-        provider:          Instantiated chat provider.
-        summary_max_tokens: Token budget hint for the LLM response.
-
-    Returns:
-        Final summary dict matching the schema defined in _build_system_prompt().
-    """
-    combined_text = json.dumps(
-        {
-            "instruction": (
-                "The following are partial summaries from sequential sections of a single "
-                "TTRPG session transcript. Combine them into one cohesive final summary."
-            ),
-            "partial_summaries": partial_summaries,
-        },
-        indent=2,
-        ensure_ascii=False,
+    category_prompt: str,
+    session_name: str,
+) -> str:
+    """Combine per-section notes into one final summary using the category prompt (reduce)."""
+    combined = "\n\n".join(
+        f"--- Section {i + 1} ---\n{n}" for i, n in enumerate(notes)
     )
-    system_prompt = _build_system_prompt(summary_max_tokens)
+    user_message = (
+        f"Session name: {session_name}\n\n"
+        "The following are notes captured from sequential sections of a single session "
+        "transcript, in order. Combine them into one cohesive summary by following the "
+        "instructions above.\n\n"
+        f"{combined}"
+    )
     print(
-        f"  Reduce: combining {len(partial_summaries)} partial summaries "
-        f"({len(combined_text):,} chars)…",
+        f"  Reduce: combining {len(notes)} section note(s) ({len(combined):,} chars)…",
         end=" ",
         flush=True,
     )
     t0 = time.time()
-    raw = _call_provider(provider, system_prompt, combined_text)
-    elapsed = time.time() - t0
-    print(f"done ({elapsed:.1f}s)")
-    return _parse_json_response(raw, context="reduce")
+    raw = _call_provider(provider, category_prompt, user_message)
+    print(f"done ({time.time() - t0:.1f}s)")
+    return _strip_markdown_fences(raw)
 
 
-def generate_summary(transcript_text: str, config: dict) -> dict:
+def generate_summary(
+    transcript_text: str,
+    config: dict,
+    category_prompt: str,
+    session_name: str,
+) -> str:
     """
-    Send the transcript to the configured chat provider and return the parsed JSON summary.
+    Send the transcript to the configured chat provider and return the Markdown summary.
 
     **Short transcripts** (≤ ``summary_max_input_tokens × 4`` characters) are sent in a
-    single pass.  **Long transcripts** are processed with a map-reduce strategy: the text is
-    split into non-overlapping chunks on newline boundaries, each chunk is summarised
-    independently (map), and all partial summaries are combined into one final structured
-    output (reduce).
-
-    An Ollama-specific warning is emitted when the transcript exceeds 32 K characters
-    (~8 K tokens) to remind users that Ollama's default context window is small.
+    single pass with the category prompt. **Long transcripts** use map-reduce: each chunk is
+    reduced to notes (map), then all notes are combined with the category prompt (reduce).
 
     Args:
         transcript_text: Full text of _combined_transcript.txt
-        config: Parsed config.yaml dict
+        config:          Parsed config.yaml dict
+        category_prompt: The category's summary prompt (system prompt)
+        session_name:    Session folder name (passed to the model for the title)
 
     Returns:
-        Parsed summary dict matching the JSON schema defined in _build_system_prompt()
+        The finished Markdown summary string.
     """
-    summary_max_tokens = int(config.get("summary_max_tokens", 2000))
     summary_max_input_tokens = int(config.get("summary_max_input_tokens", 32000))
     max_input_chars = summary_max_input_tokens * 4  # 1 token ≈ 4 characters
 
@@ -407,12 +270,12 @@ def generate_summary(transcript_text: str, config: dict) -> dict:
     # Single-pass path (transcript fits within the configured input limit)
     # ------------------------------------------------------------------
     if len(transcript_text) <= max_input_chars:
-        system_prompt = _build_system_prompt(summary_max_tokens)
+        user_message = f"Session name: {session_name}\n\nTranscript:\n{transcript_text}"
         print(f"  Sending transcript to {chat_label} (single pass)…", end=" ", flush=True)
         t0 = time.time()
-        raw = _call_provider(provider, system_prompt, transcript_text)
+        raw = _call_provider(provider, category_prompt, user_message)
         print(f"done ({time.time() - t0:.1f}s)")
-        return _parse_json_response(raw, context="single pass")
+        return _strip_markdown_fences(raw)
 
     # ------------------------------------------------------------------
     # Map-reduce path (transcript is too long for a single call)
@@ -424,206 +287,61 @@ def generate_summary(transcript_text: str, config: dict) -> dict:
     )
     print(f"  Provider: {chat_label}")
 
-    partial_summaries = [
+    notes = [
         _map_chunk(chunk, idx, len(chunks), provider)
         for idx, chunk in enumerate(chunks)
     ]
 
-    return _reduce_chunks(partial_summaries, provider, summary_max_tokens)
-
-
-# ---------------------------------------------------------------------------
-# Output writers
-# ---------------------------------------------------------------------------
-
-def write_json_summary(data: dict, path: Path) -> None:
-    """Write the structured summary dict to _session_summary.json."""
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-
-
-def _seconds_to_hms(seconds: float) -> str:
-    """Format a seconds value as HH:MM:SS for human-readable display."""
-    h = int(seconds // 3600)
-    m = int((seconds % 3600) // 60)
-    s = int(seconds % 60)
-    return f"{h:02d}:{m:02d}:{s:02d}"
-
-
-_CATEGORY_EMOJI: dict[str, str] = {
-    "combat": "⚔️",
-    "plot_reveal": "🔮",
-    "npc_introduction": "🧙",
-    "funny_moment": "😄",
-    "decision_point": "🎲",
-}
-
-
-def write_markdown_summary(data: dict, session_name: str, path: Path) -> None:
-    """
-    Write a human-readable markdown summary to _session_summary.md.
-
-    Args:
-        data:         Parsed summary dict returned by generate_summary()
-        session_name: Session folder name used as the document title
-        path:         Destination file path
-    """
-    lines: list[str] = []
-
-    lines.append(f"# Session Summary — {session_name}")
-    lines.append("")
-
-    # Narrative summary
-    lines.append("## Summary")
-    lines.append("")
-    lines.append(data.get("narrative_summary", "_No summary available._"))
-    lines.append("")
-
-    # Key moments
-    key_moments = data.get("key_moments", [])
-    if key_moments:
-        lines.append("## Key Moments")
-        lines.append("")
-        for km in key_moments:
-            emoji = _CATEGORY_EMOJI.get(km.get("category", ""), "•")
-            ts = _seconds_to_hms(float(km.get("timestamp", 0)))
-            cat = km.get("category", "").replace("_", " ").title()
-            lines.append(f"- **[{ts}]** {emoji} _{cat}_ — {km.get('description', '')}")
-            ctx = km.get("context", "")
-            if ctx:
-                lines.append(f"  > {ctx}")
-        lines.append("")
-
-    # NPCs
-    npcs = data.get("npcs", [])
-    if npcs:
-        lines.append("## NPCs")
-        lines.append("")
-        for npc in npcs:
-            lines.append(f"- **{npc.get('name', '')}** — {npc.get('context', '')}")
-        lines.append("")
-
-    # Locations
-    locations = data.get("locations", [])
-    if locations:
-        lines.append("## Locations")
-        lines.append("")
-        for loc in locations:
-            lines.append(f"- **{loc.get('name', '')}** — {loc.get('context', '')}")
-        lines.append("")
-
-    # Items
-    items = data.get("items", [])
-    if items:
-        lines.append("## Items & Artifacts")
-        lines.append("")
-        for item in items:
-            lines.append(f"- **{item.get('name', '')}** — {item.get('context', '')}")
-        lines.append("")
-
-    with open(path, "w", encoding="utf-8") as f:
-        f.write("\n".join(lines))
+    return _reduce_notes(notes, provider, category_prompt, session_name)
 
 
 # ---------------------------------------------------------------------------
 # ChromaDB helpers
 # ---------------------------------------------------------------------------
 
-COLLECTION_NAME = "dnd_sessions"
+def get_chroma_collection(config: dict, collection_name: str):
+    """Return (or create) a ChromaDB collection by name."""
+    client = get_chroma_client(config)
+    return client.get_or_create_collection(collection_name)
 
 
-def get_chroma_collection(vector_db_directory: str):
-    """Return (or create) the persistent ChromaDB collection."""
-    client = chromadb.PersistentClient(path=vector_db_directory)
-    return client.get_or_create_collection(COLLECTION_NAME)
-
-
-def vectorize_summary(
+def store_summary_chunk(
     session_name: str,
-    data: dict,
-    speakers: list[str],
+    summary_md: str,
     collection,
     config: dict,
+    category: str,
+    subcategory: str | None,
 ) -> None:
     """
-    Store the narrative summary and each key moment as ChromaDB chunks.
+    Embed the summary Markdown as a single ``type=summary`` chunk in the category collection.
 
-    Documents added:
-      - One ``type=summary`` chunk containing the full narrative summary text.
-        Metadata: {type, session_name, speakers, key_moment_count}
-      - One ``type=key_moment`` chunk per key moment.
-        Metadata: {type, session_name, category, timestamp}
-
-    Args:
-        session_name: Session folder name used as the ChromaDB document key prefix
-        data:         Parsed summary dict from generate_summary()
-        speakers:     Sorted list of unique speaker names in the transcript
-        collection:   Open ChromaDB collection
-        config:       Parsed config.yaml dict (used to instantiate the embedding provider)
+    Metadata: {type, session_name, category, subcategory}.
     """
+    text = (summary_md or "").strip()
+    if not text:
+        return
+
     embedding_provider = get_embedding_provider(config)
+    print("  Embedding summary…", end=" ", flush=True)
+    t0 = time.time()
+    emb = embedding_provider.embed(text)
+    print(f"done ({time.time() - t0:.1f}s)")
 
-    ids: list[str] = []
-    embeddings: list[list[float]] = []
-    documents: list[str] = []
-    metadatas: list[dict] = []
-
-    # --- Narrative summary chunk ---
-    narrative = data.get("narrative_summary", "")
-    if narrative:
-        print("  Embedding narrative summary…", end=" ", flush=True)
-        t0 = time.time()
-        emb = embedding_provider.embed(narrative)
-        print(f"done ({time.time() - t0:.1f}s)")
-
-        ids.append(f"{session_name}__summary")
-        embeddings.append(emb)
-        documents.append(narrative)
-        metadatas.append(
+    collection.upsert(
+        ids=[f"{session_name}__summary"],
+        embeddings=[emb],
+        documents=[text],
+        metadatas=[
             {
                 "type": "summary",
                 "session_name": session_name,
-                "speakers": ", ".join(speakers),
-                "key_moment_count": len(data.get("key_moments", [])),
+                "category": category,
+                "subcategory": subcategory or "",
             }
-        )
-
-    # --- Key moment chunks ---
-    key_moments = data.get("key_moments", [])
-    for idx, km in enumerate(key_moments):
-        description = km.get("description", "")
-        context = km.get("context", "")
-        doc_text = description
-        if context:
-            doc_text = f"{description}\n\nContext: {context}"
-        if not doc_text.strip():
-            continue
-
-        print(f"  Embedding key moment {idx + 1}/{len(key_moments)}…", end=" ", flush=True)
-        t0 = time.time()
-        emb = embedding_provider.embed(doc_text)
-        print(f"done ({time.time() - t0:.1f}s)")
-
-        ids.append(f"{session_name}__key_moment_{idx:04d}")
-        embeddings.append(emb)
-        documents.append(doc_text)
-        metadatas.append(
-            {
-                "type": "key_moment",
-                "session_name": session_name,
-                "category": km.get("category", ""),
-                "timestamp": float(km.get("timestamp", 0)),
-            }
-        )
-
-    if ids:
-        collection.upsert(
-            ids=ids,
-            embeddings=embeddings,
-            documents=documents,
-            metadatas=metadatas,
-        )
-        print(f"  Stored {len(ids)} summary chunk(s) in ChromaDB collection '{COLLECTION_NAME}'.")
+        ],
+    )
+    print(f"  Stored summary in ChromaDB collection '{collection.name}'.")
 
 
 # ---------------------------------------------------------------------------
@@ -632,16 +350,11 @@ def vectorize_summary(
 
 def summarize_session(session_name: str, session_dir: Path, config: dict) -> None:
     """
-    Generate a session summary for one session and store results in ChromaDB.
+    Generate a Markdown session summary for one session and store it in ChromaDB.
 
-    Reads _combined_transcript.txt, calls the configured LLM chat provider,
-    writes _session_summary.json and _session_summary.md, then upserts the
-    summary and key moments into ChromaDB.
-
-    Args:
-        session_name: The session folder name (used as ChromaDB document key prefix)
-        session_dir:  Full path to the session folder
-        config:       Parsed config.yaml dict
+    Reads _combined_transcript.txt and the session's category, calls the configured LLM chat
+    provider with that category's prompt, writes _session_summary.md, then upserts the summary
+    into the category's ChromaDB collection.
     """
     combined_path = session_dir / "_combined_transcript.txt"
     if not combined_path.exists():
@@ -659,25 +372,37 @@ def summarize_session(session_name: str, session_dir: Path, config: dict) -> Non
         )
         return
 
+    # Resolve the session's category → prompt + collection
+    category_name, subcategory = read_session_category(session_dir)
+    category = resolve_category(config, category_name)
+    category_prompt = load_prompt(config, category["category_name"]) or _FALLBACK_PROMPT
+
+    print(
+        f"  Category: {category['category_name']} "
+        f"(collection: {category['collection_name']}"
+        f"{f', sub-category: {subcategory}' if subcategory else ''})"
+    )
     print(f"  Transcript: {len(transcript_text)} chars, {len(speakers)} speaker(s)")
 
-    # Generate summary via LLM
-    data = generate_summary(transcript_text, config)
+    # Generate the Markdown summary via the LLM
+    summary_md = generate_summary(transcript_text, config, category_prompt, session_name)
 
-    # Write outputs
-    json_path = session_dir / "_session_summary.json"
+    # Write the summary markdown
     md_path = session_dir / "_session_summary.md"
-
-    write_json_summary(data, json_path)
-    print(f"  Written: {json_path.name}")
-
-    write_markdown_summary(data, session_name, md_path)
+    with open(md_path, "w", encoding="utf-8") as f:
+        f.write(summary_md.rstrip() + "\n")
     print(f"  Written: {md_path.name}")
 
-    # Vectorize summary and key moments into ChromaDB
-    vector_db_directory = config.get("vector_db_directory", "./vectordb")
-    collection = get_chroma_collection(vector_db_directory)
-    vectorize_summary(session_name, data, speakers, collection, config)
+    # Store the summary in the category's ChromaDB collection
+    collection = get_chroma_collection(config, category["collection_name"])
+    store_summary_chunk(
+        session_name,
+        summary_md,
+        collection,
+        config,
+        category["category_name"],
+        subcategory,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -687,7 +412,7 @@ def summarize_session(session_name: str, session_dir: Path, config: dict) -> Non
 def main() -> None:
     """Entry point for the summarize.py CLI."""
     parser = argparse.ArgumentParser(
-        description="Generate structured session summaries and store them in ChromaDB."
+        description="Generate a Markdown session summary and store it in ChromaDB."
     )
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument(

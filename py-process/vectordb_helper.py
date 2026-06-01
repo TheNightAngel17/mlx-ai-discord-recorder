@@ -18,10 +18,12 @@ import sys
 from pathlib import Path
 
 import yaml
-import chromadb
 import requests
 
-COLLECTION_NAME = "dnd_sessions"
+# Allow importing categories.py and chroma_client.py from the sibling py-query directory
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "py-query"))
+from categories import resolve_category  # noqa: E402
+from chroma_client import get_chroma_client  # noqa: E402
 
 
 def load_config() -> dict:
@@ -57,6 +59,7 @@ def embed_text(text: str, ollama_base_url: str, embedding_model: str) -> list[fl
 
 def main():
     parser = argparse.ArgumentParser(description="Inspect and manage the ChromaDB vector database.")
+    parser.add_argument("--category", default=None, help="Category whose collection to inspect (default: dnd)")
     parser.add_argument("--session", default=None, help="Filter by session name")
     parser.add_argument("--search", default=None, help="Semantic search query (requires Ollama)")
     parser.add_argument("--limit", type=int, default=5, help="Max results for search (default: 5)")
@@ -70,19 +73,22 @@ def main():
     ollama_base_url = config.get("ollama_base_url", "http://localhost:11434")
     embedding_model = config.get("embedding_model", "nomic-embed-text")
 
-    print(f"Vector DB: {vector_db_directory}")
-    print(f"Collection: {COLLECTION_NAME}")
+    category = resolve_category(config, args.category)
+    collection_name = category["collection_name"]
+
+    print(f"Category: {category['category_name']}")
+    print(f"Collection: {collection_name}")
     print()
 
-    client = chromadb.PersistentClient(path=vector_db_directory)
+    client = get_chroma_client(config)
 
     # Check if collection exists
     existing = [c.name for c in client.list_collections()]
-    if COLLECTION_NAME not in existing:
+    if collection_name not in existing:
         print("Collection does not exist yet — nothing has been vectorized.")
         sys.exit(0)
 
-    collection = client.get_collection(COLLECTION_NAME)
+    collection = client.get_collection(collection_name)
     total = collection.count()
     print(f"Total chunks in DB: {total}")
 
@@ -94,7 +100,7 @@ def main():
     if args.clear_all:
         confirm = input(f"\n⚠️  This will delete ALL {total} chunk(s) in the collection. Type YES to confirm: ")
         if confirm.strip() == "YES":
-            client.delete_collection(COLLECTION_NAME)
+            client.delete_collection(collection_name)
             print("Collection deleted.")
         else:
             print("Aborted.")

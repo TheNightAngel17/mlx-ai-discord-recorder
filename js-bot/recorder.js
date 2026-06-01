@@ -154,8 +154,10 @@ class Recorder {
    * @param {string} sessionName
    * @param {boolean} [silent=false]  When true, suppresses the announce-channel message.
    *   Pass true when called from the session panel to avoid duplicate chat messages.
+   * @param {string} [category="dnd"]   Session category id (drives prompt + collection downstream).
+   * @param {string|null} [subcategory=null]  Optional grouping label within the category.
    */
-  async start(interaction, voiceChannel, sessionName, silent = false) {
+  async start(interaction, voiceChannel, sessionName, silent = false, category = "dnd", subcategory = null) {
     if (this.isRecording) {
       await interaction.reply({
         content: "Already recording! Use `/mlx-ai record stop` first.",
@@ -226,7 +228,12 @@ class Recorder {
       fs.writeFileSync(
         path.join(sessionDir, "_session.metadata.json"),
         JSON.stringify(
-          { session_start_ms: this.startTime.getTime(), session_name: folderName },
+          {
+            session_start_ms: this.startTime.getTime(),
+            session_name: folderName,
+            category: category || "dnd",
+            subcategory: subcategory || null,
+          },
           null,
           2
         )

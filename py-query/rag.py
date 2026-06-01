@@ -19,7 +19,6 @@ vectorize.py --force on all sessions.
 
 import sys
 import time
-from pathlib import Path
 
 import chromadb
 
@@ -29,8 +28,8 @@ from providers import (
     get_chat_provider,
     get_embedding_provider,
 )
-
-COLLECTION_NAME = "dnd_sessions"
+from categories import resolve_category
+from chroma_client import get_chroma_client
 
 
 def _format_seconds(s: float) -> str:
@@ -41,11 +40,13 @@ def _format_seconds(s: float) -> str:
     return f"{h:02d}:{m:02d}:{sec:05.2f}"
 
 
-def _build_system_prompt(chunks: list[dict]) -> str:
+def _build_system_prompt(chunks: list[dict], display_name: str = "session") -> str:
     """
     Build the LLM system prompt from retrieved transcript chunks.
 
     Each chunk dict should have keys: session, start, end, speakers, text.
+    ``display_name`` is the category's display name (e.g. "D&D Session", "Work Meeting"),
+    used to make the assistant's framing category-aware.
     """
     context_parts = []
     for i, chunk in enumerate(chunks, 1):
@@ -60,8 +61,8 @@ def _build_system_prompt(chunks: list[dict]) -> str:
     context_block = "\n\n---\n\n".join(context_parts)
 
     return (
-        "You are a helpful assistant that answers questions about recorded D&D sessions "
-        "based solely on the provided transcript excerpts. "
+        f'You are a helpful assistant that answers questions about recorded sessions of type '
+        f'"{display_name}" based solely on the provided transcript excerpts. '
         "When answering, cite the session name and timestamps of the relevant sources. "
         "If the answer cannot be found in the provided context, say so clearly.\n\n"
         "=== TRANSCRIPT CONTEXT ===\n\n"
@@ -78,6 +79,8 @@ def query_rag(
     embedding_provider: EmbeddingProvider | None = None,
     chat_provider: ChatProvider | None = None,
     chroma_client: chromadb.ClientAPI | None = None,
+    category: str | None = None,
+    subcategory: str | None = None,
 ) -> dict:
     """
     Run a RAG query against the ChromaDB vector database.
@@ -93,6 +96,9 @@ def query_rag(
                               created from config on each call (CLI path).
         chroma_client:        Pre-initialised ChromaDB client. If None, a new
                               PersistentClient is opened on each call (CLI path).
+        category:             Category to search (selects the collection). Defaults to the
+                              built-in "dnd" category when omitted.
+        subcategory:          Optional sub-category tag to restrict the search to.
 
     Returns:
         {
@@ -116,34 +122,29 @@ def query_rag(
             }
         }
     """
+    # --- Resolve category → collection ---
+    category_meta = resolve_category(config, category)
+    collection_name = category_meta["collection_name"]
+
     # --- Open or reuse ChromaDB ---
     if chroma_client is None:
-        vector_db_directory = config.get("vector_db_directory", "./vectordb")
-        db_path = Path(vector_db_directory)
-        if not db_path.exists():
-            print(
-                f"Error: Vector DB directory not found: {db_path}\n"
-                "Have you run py-process/vectorize.py yet?",
-                file=sys.stderr,
-            )
-            sys.exit(1)
+        chroma_client = get_chroma_client(config)
 
-        chroma_client = chromadb.PersistentClient(path=str(db_path))
+    existing = [c.name for c in chroma_client.list_collections()]
+    if collection_name not in existing:
+        print(
+            f"Error: ChromaDB collection '{collection_name}' (category "
+            f"'{category_meta['category_name']}') does not exist.\n"
+            "Have you vectorized any sessions of this category yet?",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
-        existing = [c.name for c in chroma_client.list_collections()]
-        if COLLECTION_NAME not in existing:
-            print(
-                f"Error: ChromaDB collection '{COLLECTION_NAME}' does not exist.\n"
-                "Have you run py-process/vectorize.py yet?",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-
-    collection = chroma_client.get_collection(COLLECTION_NAME)
+    collection = chroma_client.get_collection(collection_name)
     total = collection.count()
     if total == 0:
         print(
-            "Error: The ChromaDB collection is empty. "
+            f"Error: ChromaDB collection '{collection_name}' is empty. "
             "Run py-process/vectorize.py to index some sessions first.",
             file=sys.stderr,
         )
@@ -157,7 +158,17 @@ def query_rag(
     embed_time = time.perf_counter() - t0
 
     # --- Query ChromaDB ---
-    where = {"session_name": session_filter} if session_filter else None
+    filters = []
+    if session_filter:
+        filters.append({"session_name": session_filter})
+    if subcategory:
+        filters.append({"subcategory": subcategory})
+    if not filters:
+        where = None
+    elif len(filters) == 1:
+        where = filters[0]
+    else:
+        where = {"$and": filters}
     n_results = min(top_k, total)
 
     t0 = time.perf_counter()
@@ -200,7 +211,7 @@ def query_rag(
         )
 
     # --- Generate answer ---
-    system_prompt = _build_system_prompt(chunks_for_prompt)
+    system_prompt = _build_system_prompt(chunks_for_prompt, category_meta["display_name"])
     if chat_provider is None:
         chat_provider = get_chat_provider(config)
     t0 = time.perf_counter()
