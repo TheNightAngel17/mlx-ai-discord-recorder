@@ -39,6 +39,15 @@ const NEW_SUBCATEGORY = "__new__";
 /** Max sub-categories listed in the dropdown (leaving room for the "➕ New…" entry). */
 const MAX_SUBCATEGORY_OPTIONS = 24;
 
+/**
+ * Hard cap on retained panel states. Each `/mlx-ai session` creates a panel that
+ * lives in the in-memory `panels` map; without a bound this map would grow for
+ * the entire (long-running) life of the bot. When the cap is exceeded the oldest
+ * entries are evicted (Map preserves insertion order). Stale panels just show an
+ * "expired" notice if interacted with.
+ */
+const MAX_PANELS = 50;
+
 // Panel status constants
 const STATUS = {
   IDLE: "idle",           // Panel just opened, nothing configured yet
@@ -432,6 +441,15 @@ class SessionPanel {
       log: [],
     };
 
+    // Evict the oldest panels before inserting so the map stays bounded over the
+    // bot's lifetime. Map iteration is insertion-ordered, so the first keys are
+    // the oldest.
+    while (this.panels.size >= MAX_PANELS) {
+      const oldest = this.panels.keys().next().value;
+      if (oldest === undefined) break;
+      this.panels.delete(oldest);
+    }
+
     this.panels.set(panelId, state);
 
     const { embed, rows } = this._buildPanel(panelId, state);
@@ -775,6 +793,10 @@ class SessionPanel {
         } catch (followUpErr) {
           this.logger.warn(`Failed to post public completion notice: ${followUpErr.message}`);
         }
+
+        // Terminal state — the DONE panel has no interactive components left, so
+        // release its in-memory state instead of waiting for cap-based eviction.
+        this.panels.delete(panelId);
       }
     } catch (err) {
       this.logger.error(`Session panel postProcess failed: ${err.message}`);
