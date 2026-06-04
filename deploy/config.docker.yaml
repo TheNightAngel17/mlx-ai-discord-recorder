@@ -30,6 +30,7 @@ mp3_bitrate: "128k"
 keep_wav: true
 snippet_silence_ms: 1000
 snippet_tail_pad_ms: 200
+snippet_max_ms: 30000   # safety cap on a single utterance's in-memory PCM buffer (0 = off)
 
 # --- Whisper defaults (batch fallback / shared language) ---
 whisper_model: "base"
@@ -40,9 +41,9 @@ auto_transcribe: true
 transcribe_api_host: 0.0.0.0
 transcribe_api_port: 8200
 transcribe_provider: faster-whisper
-transcribe_model: base
+transcribe_model: distil-large-v3
 transcribe_device: cuda
-transcribe_compute_type: float16
+transcribe_compute_type: int8_float16
 transcribe_min_ms: 400
 transcribe_api_url: http://py-transcribe:8200
 

@@ -108,6 +108,26 @@ class Recorder {
     this._tailPadMs =
       config.snippet_tail_pad_ms != null ? Number(config.snippet_tail_pad_ms) : 200;
 
+    // Safety valve against unbounded memory growth. An utterance only closes
+    // after `_silenceMs` of silence, which relies on Discord *stopping* audio
+    // packets. An open/hot mic or constant background audio (music, fans) never
+    // goes silent, so a single utterance would buffer decoded PCM without bound
+    // (~192 KB/s per speaker). When the in-memory buffer for one utterance
+    // reaches this many ms of audio it is flushed to disk as a segment and the
+    // buffer is reset, capping live memory. Set <= 0 to disable the cap.
+    const snippetMaxMs =
+      config.snippet_max_ms != null ? Number(config.snippet_max_ms) : 30_000;
+    this._snippetMaxBytes =
+      snippetMaxMs > 0
+        ? Math.max(
+            BLOCK_ALIGN,
+            Math.floor(
+              ((snippetMaxMs / 1000) * SAMPLE_RATE * CHANNELS * BYTES_PER_SAMPLE) /
+                BLOCK_ALIGN
+            ) * BLOCK_ALIGN
+          )
+        : Infinity;
+
     // Live transcription: when enabled, each finished snippet is POSTed to the
     // warm-model transcription service (py-transcribe) as it is recorded.
     this._autoTranscribe = Boolean(config.auto_transcribe);
@@ -140,6 +160,31 @@ class Recorder {
      * @type {((username: string) => void) | null}
      */
     this.onMidSessionJoin = null;
+
+    // Resolve and report prism-media's Opus backend at startup so it's obvious
+    // which decoder is active. The native @discordjs/opus backend raises
+    // recoverable JS errors on bad packets; the pure-WASM opusscript fallback can
+    // abort() the whole process ("memory access out of bounds"), so warn loudly
+    // if we ended up on it (e.g. the native module failed to build or load).
+    try {
+      const probe = new prism.opus.Decoder({
+        rate: SAMPLE_RATE,
+        channels: CHANNELS,
+        frameSize: OPUS_FRAME_SIZE,
+      });
+      probe.destroy();
+      const backend = prism.opus.Encoder.type;
+      if (backend === "opusscript") {
+        this.logger.warn(
+          "Opus backend is 'opusscript' (pure-WASM) — it can abort the process on malformed packets. " +
+            "Install @discordjs/opus for a stable native decoder."
+        );
+      } else {
+        this.logger.info(`Opus backend: ${backend}`);
+      }
+    } catch (err) {
+      this.logger.error(`No usable Opus decoder available: ${err.message}`);
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -568,10 +613,58 @@ class Recorder {
       frameSize: OPUS_FRAME_SIZE,
     });
 
-    const chunks = [];
+    const byteRate = SAMPLE_RATE * CHANNELS * BYTES_PER_SAMPLE;
+
+    let chunks = [];
+    let bufferedBytes = 0; // PCM bytes held in `chunks`, not yet written to disk
+    let writtenBytes = 0; // total PCM bytes already flushed to disk for this utterance
     let finalized = false;
 
     const utterance = { opusStream, decoder, offsetMs };
+
+    // Write the currently-buffered PCM as one snippet WAV and reset the buffer.
+    // Long utterances are split into multiple segments (see the size cap in the
+    // 'data' handler); each segment is named by its own session-relative start
+    // offset so files stay chronologically sorted and the transcription pipeline
+    // still gets correct offsets. `isFinal` controls tail padding — only the
+    // genuine end of an utterance gets a silent lead-out; mid-speech splits must
+    // not have silence injected into them.
+    const writeSegment = (isFinal) => {
+      if (bufferedBytes === 0) return; // nothing buffered — nothing to write
+      let pcm = Buffer.concat(chunks, bufferedBytes);
+      chunks = [];
+      const segmentBytes = bufferedBytes;
+      bufferedBytes = 0;
+
+      // This segment's offset = utterance start + duration of everything already
+      // flushed before it.
+      const segOffsetMs = offsetMs + Math.round((writtenBytes / byteRate) * 1000);
+      writtenBytes += segmentBytes;
+
+      // Duration of captured speech, measured before tail padding — used to skip
+      // enqueuing sub-threshold blips for transcription.
+      const speechMs = (segmentBytes / byteRate) * 1000;
+
+      // Append a short tail of silence so Whisper doesn't clip the last word.
+      if (isFinal && this._tailPadMs > 0) {
+        const padBytes =
+          Math.floor(((this._tailPadMs / 1000) * byteRate) / BLOCK_ALIGN) * BLOCK_ALIGN;
+        if (padBytes > 0) pcm = Buffer.concat([pcm, Buffer.alloc(padBytes, 0)]);
+      }
+
+      const wavPath = path.join(
+        entry.dir,
+        `${String(segOffsetMs).padStart(10, "0")}.wav`
+      );
+      fs.writeFileSync(wavPath, buildWav(pcm));
+      entry.snippetCount += 1;
+
+      // Live transcription: hand the finished snippet to the warm-model service
+      // (fire-and-forget — must not block capture).
+      if (this._autoTranscribe && speechMs >= this._transcribeMinMs) {
+        this._enqueueSnippet(segOffsetMs, wavPath, entry);
+      }
+    };
 
     const finalize = () => {
       if (finalized) return;
@@ -579,48 +672,45 @@ class Recorder {
       entry.active.delete(utterance);
 
       try {
-        let pcm = Buffer.concat(chunks);
-        if (pcm.length === 0) return; // nothing decodable — drop it
-
-        // Duration of captured speech, measured before tail padding — used to
-        // skip enqueuing sub-threshold blips for transcription.
-        const speechMs =
-          (pcm.length / (SAMPLE_RATE * CHANNELS * BYTES_PER_SAMPLE)) * 1000;
-
-        // Append a short tail of silence so Whisper doesn't clip the last word.
-        if (this._tailPadMs > 0) {
-          const padBytes =
-            Math.floor(
-              ((this._tailPadMs / 1000) * SAMPLE_RATE * CHANNELS * BYTES_PER_SAMPLE) /
-                BLOCK_ALIGN
-            ) * BLOCK_ALIGN;
-          if (padBytes > 0) pcm = Buffer.concat([pcm, Buffer.alloc(padBytes, 0)]);
-        }
-
-        const wavPath = path.join(
-          entry.dir,
-          `${String(offsetMs).padStart(10, "0")}.wav`
-        );
-        fs.writeFileSync(wavPath, buildWav(pcm));
-        entry.snippetCount += 1;
-
-        // Live transcription: hand the finished snippet to the warm-model
-        // service (fire-and-forget — must not block capture).
-        if (this._autoTranscribe && speechMs >= this._transcribeMinMs) {
-          this._enqueueSnippet(offsetMs, wavPath, entry);
-        }
+        writeSegment(true);
       } catch (err) {
         this.logger.error(`Failed to save snippet for ${entry.username}: ${err.message}`);
       }
+
+      // Guarantee the opusscript WASM decoder is freed on every code path,
+      // including stream errors where the pipe never calls decoder.end(). The
+      // prism Decoder frees its shared-heap WASM allocation in _cleanup(), which
+      // only runs on _final()/_destroy(); destroy() here is idempotent.
+      if (!decoder.destroyed) decoder.destroy();
+      if (!opusStream.destroyed) opusStream.destroy();
     };
 
-    decoder.on("data", (chunk) => chunks.push(chunk));
+    decoder.on("data", (chunk) => {
+      chunks.push(chunk);
+      bufferedBytes += chunk.length;
+      // Safety valve: flush to disk before the in-memory buffer can grow without
+      // bound for a never-silent stream (see _snippetMaxBytes).
+      if (bufferedBytes >= this._snippetMaxBytes) {
+        try {
+          writeSegment(false);
+        } catch (err) {
+          this.logger.error(
+            `Failed to flush snippet segment for ${entry.username}: ${err.message}`
+          );
+          // Drop the buffer so a persistent write failure can't itself OOM us.
+          chunks = [];
+          bufferedBytes = 0;
+        }
+      }
+    });
     decoder.on("end", finalize);
     decoder.on("error", (err) => {
       this.logger.warn(`Opus decoder error for ${entry.username}: ${err.message}`);
+      finalize();
     });
     opusStream.on("error", (err) => {
       this.logger.warn(`Opus stream error for ${entry.username}: ${err.message}`);
+      finalize();
     });
 
     // Manual flush used by stop(): stop feeding the decoder, flush it so 'end'

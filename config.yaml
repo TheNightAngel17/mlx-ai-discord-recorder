@@ -30,6 +30,14 @@ snippet_silence_ms: 1000
 # snippet_tail_pad_ms: extra trailing silence appended to each snippet so Whisper
 #   has a short lead-out and doesn't clip the final word. Set 0 to disable.
 snippet_tail_pad_ms: 200
+# snippet_max_ms: safety cap on a single utterance's in-memory audio buffer. An
+#   utterance only closes after snippet_silence_ms of *silence*, which relies on
+#   Discord stopping audio packets. An open/hot mic or constant background audio
+#   (music, fans) never goes silent, so without this cap one utterance would
+#   buffer decoded PCM without bound (~192 KB/s per speaker) and can exhaust the
+#   bot's memory on long sessions. When the buffer reaches this many ms it is
+#   flushed to disk as a segment and the buffer is reset. Set 0 to disable.
+snippet_max_ms: 30000
 
 # Whisper transcription defaults.
 # These are used when the /mlx-ai transcribe start command is run
@@ -60,11 +68,14 @@ transcribe_api_port: 8200
 # GPU) or openai-whisper (PyTorch reference, matches the batch pipeline output).
 transcribe_provider: faster-whisper
 # Model size. If unset, falls back to whisper_model above.
-transcribe_model: base
+# Sizes: tiny[.en], base[.en], small[.en], medium[.en], large-v3, large-v3-turbo.
+# distil-large-v3 = near large-v3 accuracy, ~6x faster, low VRAM (good on an 8GB card).
+transcribe_model: distil-large-v3
 # Device: cuda | cpu | auto
 transcribe_device: cuda
-# faster-whisper compute type: float16 (GPU) or int8 (CPU). Ignored by openai-whisper.
-transcribe_compute_type: float16
+# faster-whisper compute type. int8_float16 quantizes weights on GPU (~half the VRAM,
+# negligible accuracy loss); float16 = full precision on GPU; int8 = CPU. Ignored by openai-whisper.
+transcribe_compute_type: int8_float16
 # Snippets shorter than this many ms are treated as non-speech blips and skipped
 # (both live and in the batch fallback).
 transcribe_min_ms: 400
