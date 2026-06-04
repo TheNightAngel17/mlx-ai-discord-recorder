@@ -86,6 +86,20 @@ def write_sidecar(wav_path: Path, offset_ms: int, language: str | None, segments
     return sidecar
 
 
+def delete_snippet(wav_path: Path) -> None:
+    """Delete a snippet WAV and any sidecar siblings (best-effort).
+
+    Used when a snippet transcribes to no speech and `prune_empty_snippets` is on:
+    a noise/silence clip is pure waste on disk, so we reclaim it immediately. The
+    WAV is fully written before it is enqueued, so nothing else is touching it.
+    """
+    for path in (wav_path, wav_path.with_suffix(".json"), wav_path.with_suffix(".json.tmp")):
+        try:
+            path.unlink()
+        except OSError:
+            pass  # already gone or not present — nothing to reclaim
+
+
 # ---------------------------------------------------------------------------
 # Worker — the single-consumer that guarantees one transcription at a time
 # ---------------------------------------------------------------------------
@@ -112,11 +126,19 @@ async def _worker(app: FastAPI) -> None:
                 segments = await loop.run_in_executor(
                     None, app.state.provider.transcribe, str(wav_path), language
                 )
-                write_sidecar(wav_path, offset_ms, language, segments)
-                logger.info(
-                    "Transcribed %s/%s (%d segments)",
-                    session, wav_path.name, len(segments),
-                )
+                if not segments and app.state.prune_empty:
+                    # No speech detected — reclaim the disk instead of keeping a
+                    # noise/silence WAV (and writing an empty sidecar) around.
+                    delete_snippet(wav_path)
+                    logger.info(
+                        "Pruned empty snippet %s/%s (no speech)", session, wav_path.name
+                    )
+                else:
+                    write_sidecar(wav_path, offset_ms, language, segments)
+                    logger.info(
+                        "Transcribed %s/%s (%d segments)",
+                        session, wav_path.name, len(segments),
+                    )
         except Exception as exc:  # never let one bad snippet stall the queue
             logger.error("Failed to transcribe %s: %s", wav_path, exc)
         finally:
@@ -140,6 +162,9 @@ async def lifespan(app: FastAPI):
         language = None
     app.state.language = language
     app.state.min_ms = int(config.get("transcribe_min_ms", 400))
+    # When on, snippets that transcribe to no speech have their WAV + sidecar
+    # deleted immediately to reclaim disk (see delete_snippet / _worker).
+    app.state.prune_empty = bool(config.get("prune_empty_snippets", False))
 
     # Build the warm model once.
     app.state.provider = None

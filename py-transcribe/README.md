@@ -63,6 +63,23 @@ The service reads the repo-root `config.yaml` and `.env` on startup.
 | `transcribe_device` | `cuda` | `cuda`, `cpu`, or `auto` |
 | `transcribe_compute_type` | `float16` | faster-whisper compute type (`int8` on CPU) |
 | `transcribe_min_ms` | `400` | Snippets shorter than this are skipped (likely noise) |
+| `prune_empty_snippets` | `false` | Delete a snippet's WAV + sidecar when it transcribes to no speech (frees disk; those clips can't be re-transcribed later) |
+
+### Noise / hallucination pruning (faster-whisper only)
+
+Large/distil models hallucinate boilerplate ("Thank you.", "I don't know.") on
+noise-only clips. These controls suppress that without hurting real speech:
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `transcribe_vad_filter` | `true` | Silero VAD strips non-speech *before* decoding — the biggest lever |
+| `transcribe_vad_min_silence_ms` | `500` | VAD `min_silence_duration_ms`; raise if it clips short real utterances |
+| `transcribe_condition_on_previous_text` | `false` | Stop a hallucinated segment from seeding the next |
+| `transcribe_no_speech_threshold` | `0.6` | Model's silence gate; raise toward `0.8` to be stricter |
+| `transcribe_log_prob_threshold` | `-1.0` | Decode quality gate |
+| `transcribe_compression_ratio_threshold` | `2.4` | Repetition/garbage gate |
+| `transcribe_hallucination_silence_threshold` | `2.0` | Skip suspicious silent gaps (seconds); `null` disables |
+| `transcribe_max_no_speech_prob` | `0.8` | Post-filter: drop segments above this `no_speech_prob`; `null` disables |
 
 Language is shared with the batch pipeline via `whisper_language`.
 

@@ -139,9 +139,14 @@ python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}'); print(f'GP
 
 ### `process.py` — Full Pipeline Orchestrator
 
-Runs all four processing steps in order for a single session. This is the script the JS bot calls when you press **⚙️ Post-Process** in the `/mlx-ai session` control panel.
+Runs all four processing steps in order for a single session. This is the script the JS bot calls when you press **⚙️ Post-Process** in the `/mlx-ai session` control panel — and, with the re-run flags below, when you run `/mlx-ai re-post-process`.
 
 If any step fails, the pipeline halts immediately. Step 4 (summarize) is controlled by the **☑ Generate Summary** toggle in the session panel, which passes `--summarize` or `--no-summarize` to this script. You can also pass `--no-summarize` on the command line to skip it.
+
+**Re-processing an existing session.** Transcription is sidecar-driven (see [`transcribe.py`](#transcribepy--transcript-assembly-sidecar-aware)) and vectorization skips sessions already in the DB, so a plain re-run reuses the old transcript and won't re-index. Two flags make a true re-run possible:
+
+- `--retranscribe` — clear the per-snippet `<offset_ms>.json` sidecars and rebuild the transcript from audio. Re-transcription runs through the warm-model [py-transcribe](../py-transcribe/README.md) service (the lean Docker image of this service has no Whisper); if that service is unreachable, transcribe.py's local Whisper batch fallback handles it. Needs the original snippet WAVs (only present when `keep_wav: true`).
+- `--force-vectorize` — pass `--force` to `vectorize.py` so the already-indexed session is re-indexed instead of skipped.
 
 #### Usage
 
@@ -157,6 +162,9 @@ python process.py <session_name> --model large --language en
 
 # Skip summary generation
 python process.py <session_name> --no-summarize
+
+# Re-process an existing session: rebuild the transcript from audio and re-index
+python process.py <session_name> --retranscribe --force-vectorize
 ```
 
 #### Terminal Example
@@ -177,6 +185,8 @@ python process.py 20260330_143000_Campaign1_Session4 --model medium --language e
 | `--model` | ❌ | From `config.yaml` | Whisper model: `tiny`, `base`, `small`, `medium`, `large` |
 | `--language` | ❌ | From `config.yaml` | Language code (e.g. `en`). Omit for auto-detect. |
 | `--no-summarize` | ❌ | Summarize is on by default | Pass to skip Step 4 (session summary generation) |
+| `--retranscribe` | ❌ | off | Clear sidecars and rebuild the transcript from audio before assembling (needs the snippet WAVs) |
+| `--force-vectorize` | ❌ | off | Re-index a session already present in the vector DB (passes `--force` to `vectorize.py`) |
 
 ---
 
@@ -236,8 +246,8 @@ Reconstructs the session timeline from the per-user utterance snippets into a si
 
 1. Walks each participant's sub-folder and reads every snippet's start offset from its filename (skips `_`/`.`-prefixed entries)
 2. Rebuilds one full-length track per user by placing each snippet at its offset on a silent canvas (a user's own utterances never overlap), then overlays all user tracks — preserving silence where someone wasn't talking and overlap where people talked over each other
-3. Exports `_session_mix.wav` and `_session_mix.mp3`
-4. Optionally deletes the snippet WAVs and their now-empty sub-folders (controlled by `keep_wav` in `config.yaml`)
+3. Exports `_session_mix.mp3` (always) and `_session_mix.wav` (only when `keep_mix_wav: true`)
+4. Optionally deletes the snippet WAVs and their now-empty sub-folders (controlled by `keep_wav` in `config.yaml`), and removes any user sub-folder left empty (e.g. by live empty-snippet pruning)
 
 #### Usage
 
@@ -267,6 +277,7 @@ python merge_audio.py 20260330_143000_Campaign1_Session4
 |-----|---------|-------------|
 | `mp3_bitrate` | `"128k"` | MP3 bitrate (e.g. `"64k"`, `"128k"`, `"192k"`, `"320k"`) |
 | `keep_wav` | `true` | Keep the per-user snippet WAVs (and sub-folders) after the mix is exported |
+| `keep_mix_wav` | `false` | Keep the uncompressed `_session_mix.wav` next to the MP3. It's large and nothing downstream reads it; the MP3 is always exported |
 
 ---
 
@@ -481,6 +492,7 @@ All configuration is in the root `config.yaml`. The fields relevant to `py-proce
 | `whisper_language` | `"en"` | Default language (set to `"auto"` for auto-detection) |
 | `mp3_bitrate` | `"128k"` | MP3 compression bitrate |
 | `keep_wav` | `true` | Keep original WAV files after MP3 export |
+| `keep_mix_wav` | `false` | Keep the uncompressed `_session_mix.wav` (MP3 is always exported) |
 | `vector_db_directory` | `./vectordb` | ChromaDB persistence directory |
 | `embedding_provider` | `ollama` | Embedding backend: `ollama`, `openai`, or `voyage` |
 | `embedding_model` | `nomic-embed-text` | Embedding model name |
@@ -523,8 +535,8 @@ recordings/
     ├── thenightangel17.txt              # Per-user Whisper transcript
     ├── playerone.txt
     ├── _combined_transcript.txt         # All users merged chronologically
-    ├── _session_mix.wav                 # Combined WAV (snippets placed at their offsets, all users mixed)
-    ├── _session_mix.mp3                 # Compressed combined audio
+    ├── _session_mix.wav                 # Combined WAV (only when keep_mix_wav: true)
+    ├── _session_mix.mp3                 # Compressed combined audio (always exported)
     └── _session_summary.md              # Markdown summary (format set by the session's category prompt)
 ```
 

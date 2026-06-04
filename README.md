@@ -254,6 +254,10 @@ pip install -r py-transcribe/requirements.txt
 | `announce_channel` | `"bot-commands"` | Text channel for bot announcements |
 | `mp3_bitrate` | `"128k"` | MP3 compression bitrate |
 | `keep_wav` | `true` | Keep original per-user WAV files after MP3 export |
+| `keep_mix_wav` | `false` | Keep the uncompressed `_session_mix.wav` next to the MP3 (large; the MP3 is always exported) |
+| `ignore_bots` | `true` | Skip recording all Discord bots (e.g. music bots) — no WAVs, no transcription |
+| `do_not_record` | `[]` | Additionally skip specific speakers by user ID (preferred) or username (case-insensitive) |
+| `prune_empty_snippets` | `true` | py-transcribe deletes a snippet's WAV + sidecar when it transcribes to no speech (frees disk; not re-transcribable) |
 | `whisper_model` | `"base"` | Default Whisper model size (`tiny`, `base`, `small`, `medium`, `large`) |
 | `whisper_language` | `"en"` | Default language code, or `"auto"` for auto-detection |
 | `auto_transcribe` | `true` | Live-transcribe each utterance via the warm-model service (`py-transcribe`) |
@@ -263,6 +267,7 @@ pip install -r py-transcribe/requirements.txt
 | `transcribe_device` | `cuda` | Live transcription device: `cuda`, `cpu`, or `auto` |
 | `transcribe_compute_type` | `float16` | faster-whisper compute type (`int8` on CPU) |
 | `transcribe_min_ms` | `400` | Skip snippets shorter than this (likely non-speech) |
+| `transcribe_vad_filter` | `true` | Silero VAD strips non-speech before decoding (kills noise-only "Thank you." hallucinations). Plus `transcribe_no_speech_threshold`, `transcribe_max_no_speech_prob`, etc. — see [py-transcribe README](py-transcribe/README.md#noise--hallucination-pruning-faster-whisper-only) |
 | `vector_db_directory` | `./vectordb` | Where ChromaDB persists its data |
 | `chunk_minutes` | `3` | Time-window size (minutes) for chunking transcripts |
 | `embedding_provider` | `ollama` | Embedding backend: `ollama`, `openai`, or `voyage` |
@@ -328,7 +333,8 @@ Then use Discord slash commands:
 
 1. `/mlx-ai session` — Open the interactive session control panel: pick a category and sub-category, set a name, select a voice channel, start/stop recording, choose a Whisper model, and run post-processing — all from one place
 2. `/mlx-ai ask question:What happened when the party entered the cave?` — Ask a natural-language question about any recorded session (optionally `category:` / `subcategory:` to scope it)
-3. `/mlx-ai category add|edit|delete|list` — Manage session categories. `add`/`edit` open a modal for the display name, ChromaDB collection name, and the summary prompt (the built-in `dnd` category cannot be deleted)
+3. `/mlx-ai re-post-process session:<folder>` — Re-run the full pipeline (transcribe → merge → vectorize → summarize) on an existing session; add `re_transcribe:true` to rebuild the transcript from the audio
+4. `/mlx-ai category add|edit|delete|list` — Manage session categories. `add`/`edit` open a modal for the display name, ChromaDB collection name, and the summary prompt (the built-in `dnd` category cannot be deleted)
 
 ---
 

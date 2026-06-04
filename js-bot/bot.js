@@ -145,6 +145,28 @@ const commands = [
             .setRequired(false)
         )
     )
+    .addSubcommand(
+      new SlashCommandSubcommandBuilder()
+        .setName("re-post-process")
+        .setDescription(
+          "Re-run the full post-processing pipeline (transcribe → merge → vectorize → summarize) on a session"
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName("session")
+            .setDescription("The session folder to re-process")
+            .setRequired(true)
+            .setAutocomplete(true)
+        )
+        .addBooleanOption((opt) =>
+          opt
+            .setName("re_transcribe")
+            .setDescription(
+              "Also re-transcribe the audio from scratch, rebuilding the transcript (default: false)"
+            )
+            .setRequired(false)
+        )
+    )
     .addSubcommandGroup(
       new SlashCommandSubcommandGroupBuilder()
         .setName("category")
@@ -263,11 +285,53 @@ client.on("interactionCreate", async (interaction) => {
       category,
       subcategory
     );
+    return;
+  }
+
+  if (group === null && sub === "re-post-process") {
+    const sessionName = interaction.options.getString("session");
+    const retranscribe = interaction.options.getBoolean("re_transcribe") ?? false;
+    const model = config.whisper_model || "base";
+    const language =
+      config.whisper_language === "auto" ? null : config.whisper_language || null;
+    const generateSummary = config.auto_summarize !== false;
+    await postProcessor.rePostProcess(
+      interaction,
+      sessionName,
+      model,
+      language,
+      retranscribe,
+      generateSummary
+    );
   }
 });
 
 // ---------------------------------------------------------------------------
+// List recorded session folders (newest first) for the re-post-process picker.
+// Folder names are timestamp-prefixed (YYYYMMDD_HHMMSS_name), so a reverse
+// lexicographic sort puts the most recent sessions on top. Reserved
+// underscore/dot-prefixed entries are skipped.
+// ---------------------------------------------------------------------------
+function listSessionFolders() {
+  const outputDir = config.output_directory || "./recordings";
+  let entries;
+  try {
+    entries = fs.readdirSync(outputDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return entries
+    .filter(
+      (e) => e.isDirectory() && !e.name.startsWith("_") && !e.name.startsWith(".")
+    )
+    .map((e) => e.name)
+    .sort()
+    .reverse();
+}
+
+// ---------------------------------------------------------------------------
 // Autocomplete for /mlx-ai ask — category + subcategory options
+// (and the session picker for /mlx-ai re-post-process)
 // ---------------------------------------------------------------------------
 client.on("interactionCreate", async (interaction) => {
   if (!interaction.isAutocomplete()) return;
@@ -277,6 +341,15 @@ client.on("interactionCreate", async (interaction) => {
   const query = (focused.value || "").toLowerCase();
 
   try {
+    if (focused.name === "session") {
+      const choices = listSessionFolders()
+        .filter((name) => name.toLowerCase().includes(query))
+        .slice(0, 25)
+        .map((name) => ({ name: name.slice(0, 100), value: name.slice(0, 100) }));
+      await interaction.respond(choices);
+      return;
+    }
+
     if (focused.name === "category") {
       const choices = categories
         .listCategories(config)

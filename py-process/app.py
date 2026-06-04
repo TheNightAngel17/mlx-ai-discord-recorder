@@ -109,6 +109,10 @@ def _build_command(job: dict, config: dict) -> list[str]:
             cmd += ["--language", job["language"]]
         if not job.get("summarize", True):
             cmd += ["--no-summarize"]
+        if job.get("retranscribe"):
+            cmd += ["--retranscribe"]
+        if job.get("force_vectorize"):
+            cmd += ["--force-vectorize"]
         return cmd
     if kind == "merge":
         return [sys.executable, str(SCRIPT_DIR / "merge_audio.py"), job["target"]]
@@ -215,6 +219,12 @@ class ProcessRequest(BaseModel):
     model: str | None = Field(None, description="Whisper model size (batch fallback)")
     language: str | None = Field(None, description="Language code, or null for default")
     summarize: bool = Field(True, description="Generate a session summary")
+    retranscribe: bool = Field(
+        False, description="Clear sidecars and re-transcribe the audio before assembling"
+    )
+    force_vectorize: bool = Field(
+        False, description="Re-index the session even if it is already in the vector DB"
+    )
 
 
 class MergeRequest(BaseModel):
@@ -252,7 +262,13 @@ def _enqueue(app: FastAPI, job: dict) -> dict:
 @app.post("/api/process", status_code=202)
 async def process_endpoint(req: ProcessRequest):
     job = _new_job("process", req.session)
-    job.update(model=req.model, language=req.language, summarize=req.summarize)
+    job.update(
+        model=req.model,
+        language=req.language,
+        summarize=req.summarize,
+        retranscribe=req.retranscribe,
+        force_vectorize=req.force_vectorize,
+    )
     return _enqueue(app, job)
 
 
