@@ -155,11 +155,13 @@ def main():
 
     mp3_bitrate = config.get("mp3_bitrate", "128k")
     keep_wav = config.get("keep_wav", True)
+    keep_mix_wav = config.get("keep_mix_wav", False)
 
     print(f"Session:  {args.session}")
     print(f"Path:     {session_dir}")
     print(f"Bitrate:  {mp3_bitrate}")
     print(f"Keep WAV: {keep_wav}")
+    print(f"Keep mix WAV: {keep_mix_wav}")
     print(f"Users:    {len(users)} participant(s), {total_snippets} snippet(s)")
     print()
 
@@ -193,11 +195,13 @@ def main():
     mix = mix_segments(user_tracks)
     print(f"done ({len(mix) / 1000:.1f}s)")
 
-    # Export combined WAV
-    mix_wav_path = session_dir / "_session_mix.wav"
-    print(f"Exporting combined WAV -> {mix_wav_path.name}...", end=" ", flush=True)
-    mix.export(str(mix_wav_path), format="wav")
-    print("done")
+    # Export combined WAV (optional — the uncompressed mix is large and nothing
+    # downstream reads it; the MP3 below is always produced).
+    if keep_mix_wav:
+        mix_wav_path = session_dir / "_session_mix.wav"
+        print(f"Exporting combined WAV -> {mix_wav_path.name}...", end=" ", flush=True)
+        mix.export(str(mix_wav_path), format="wav")
+        print("done")
 
     # Export combined MP3
     mix_mp3_path = session_dir / "_session_mix.mp3"
@@ -228,6 +232,16 @@ def main():
             except OSError:
                 pass  # non-empty or already gone
         print(f"\nDeleted {removed} snippet WAV(s) (keep_wav: false).")
+
+    # Remove any user sub-folders left empty (e.g. all of a user's snippets were
+    # pruned as no-speech by py-transcribe). rmdir only succeeds when empty, so a
+    # folder that still holds kept WAVs is never touched.
+    for user_dir in user_dirs:
+        if not any(user_dir.glob("*.wav")):
+            try:
+                user_dir.rmdir()
+            except OSError:
+                pass  # non-empty (non-wav files) or already gone
 
     print("\nDone.")
 

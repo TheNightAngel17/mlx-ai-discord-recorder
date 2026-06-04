@@ -28,6 +28,10 @@ categories_directory: /app/categories
 announce_channel: "bot-commands"
 mp3_bitrate: "128k"
 keep_wav: true
+keep_mix_wav: false     # keep the uncompressed _session_mix.wav (MP3 is always exported)
+# Do-not-record: skip certain speakers entirely (no WAVs, no transcription).
+ignore_bots: true       # skip every Discord bot (e.g. music bots)
+do_not_record: []       # additionally skip specific users by ID (preferred) or username
 snippet_silence_ms: 1000
 snippet_tail_pad_ms: 200
 snippet_max_ms: 30000   # safety cap on a single utterance's in-memory PCM buffer (0 = off)
@@ -54,6 +58,7 @@ transcribe_log_prob_threshold: -1.0
 transcribe_compression_ratio_threshold: 2.4
 transcribe_hallucination_silence_threshold: 2.0
 transcribe_max_no_speech_prob: 0.8
+prune_empty_snippets: true   # delete WAV+sidecar when a snippet transcribes to no speech
 transcribe_api_url: http://py-transcribe:8200
 
 # --- Post-processing job service (py-process) ---

@@ -160,6 +160,7 @@ Setting `re_transcribe:true` rebuilds the transcript **from the audio**: it clea
 - **Per-user utterance snippets** — Each user's speech is saved as discrete snippet WAVs in a per-user sub-folder: `<output_directory>/<YYYYMMDD_HHMMSS>_<session_name>/<username>/<offset_ms>.wav`. The filename is the snippet's session-relative start offset in milliseconds, so files sort chronologically and carry their own timing
 - **Utterance segmentation** — A fresh capture opens when a user starts talking and closes after they've been silent for `snippet_silence_ms` (default 1000ms; see `config.yaml`). That silence window also acts as a back-pad, keeping trailing words that Discord can signal as "stopped" slightly early
 - **Live transcription (optional)** — when `auto_transcribe` is enabled, each finished snippet is POSTed (fire-and-forget) to the warm-model transcription service ([py-transcribe](../py-transcribe/README.md)) so it's transcribed *during* the session. If the service is down, capture is unaffected and the batch fallback transcribes at post-process time
+- **Do-not-record list** — speakers can be skipped entirely (no sub-folder, no WAV, no transcription). `ignore_bots` (default `true`) skips every Discord bot — the usual fix for a music bot eating disk — and `do_not_record` is an explicit blacklist of Discord user IDs (preferred; stable) and/or usernames (case-insensitive). See `config.yaml`
 - **Auto-stop** — When the last human leaves the voice channel, the recording stops automatically (any in-flight snippet is flushed first)
 - **Mid-session joins** — Users who join after recording starts are detected and recorded; their sub-folder is created on their first utterance, their username appears in the panel log, and an announcement is sent to the configured text channel
 - **Session panel** — The `/mlx-ai session` panel guides the user through the entire session lifecycle. When post-processing completes, a public summary embed is posted to the channel.
@@ -201,8 +202,8 @@ recordings/
     ├── TheNightAngel17.txt              # Per-user Whisper transcript
     ├── PlayerTwo.txt
     ├── _combined_transcript.txt         # All users merged chronologically
-    ├── _session_mix.wav                 # Snippets placed at their offsets, all users mixed
-    └── _session_mix.mp3                 # Compressed combined audio
+    ├── _session_mix.wav                 # Snippets placed at their offsets, all users mixed (only when keep_mix_wav: true)
+    └── _session_mix.mp3                 # Compressed combined audio (always exported)
 ```
 
 ---

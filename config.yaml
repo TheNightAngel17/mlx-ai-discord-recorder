@@ -14,6 +14,22 @@ announce_channel: "bot-commands"
 mp3_bitrate: "128k"     # MP3 bitrate for compression (e.g. "64k", "128k", "192k", "320k")
 keep_wav: true           # Keep the per-user snippet WAVs after the session mix is exported.
                          # Set false to delete snippets (and their sub-folders) once merge_audio.py finishes.
+# keep_mix_wav: keep the uncompressed _session_mix.wav next to the MP3. It's large
+#   (~160 MB per 23 min) and nothing downstream reads it — the MP3 is always exported.
+#   Leave false to save disk; set true if you want the lossless combined mix.
+keep_mix_wav: false
+
+# Do-not-record: skip certain speakers entirely (no WAVs, no transcription).
+# ignore_bots: skip every Discord bot (music bots are the usual disk hog).
+#   Set false if you actually want bot audio transcribed.
+ignore_bots: true
+# do_not_record: additionally skip these specific users, by ID (preferred — stable)
+#   or username (case-insensitive). Leave empty ([]) to skip nobody extra.
+#   Example:
+#     do_not_record:
+#       - "123456789012345678"   # a user/bot ID
+#       - "SomeMusicBot"         # or a username
+do_not_record: []
 
 # Recording / snippet settings
 # Each participant's speech is captured as discrete utterance snippets in a
@@ -102,6 +118,10 @@ transcribe_hallucination_silence_threshold: 2.0
 # 0.8 is conservative and rarely touches real speech; lower it (e.g. 0.6) for more
 # aggressive pruning. Set to null to disable.
 transcribe_max_no_speech_prob: 0.8
+# When a snippet transcribes to no speech at all (e.g. pruned by the VAD/gates
+# above), delete its WAV + sidecar immediately to reclaim disk. This frees space
+# live during a session; the trade-off is those clips can't be re-transcribed later.
+prune_empty_snippets: true
 # URL the bot and process.py use to REACH this service. Use localhost for
 # bare-metal; in Docker set it to the service name (e.g. http://py-transcribe:8200).
 transcribe_api_url: http://localhost:8200

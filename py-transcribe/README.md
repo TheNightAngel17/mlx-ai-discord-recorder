@@ -63,6 +63,7 @@ The service reads the repo-root `config.yaml` and `.env` on startup.
 | `transcribe_device` | `cuda` | `cuda`, `cpu`, or `auto` |
 | `transcribe_compute_type` | `float16` | faster-whisper compute type (`int8` on CPU) |
 | `transcribe_min_ms` | `400` | Snippets shorter than this are skipped (likely noise) |
+| `prune_empty_snippets` | `false` | Delete a snippet's WAV + sidecar when it transcribes to no speech (frees disk; those clips can't be re-transcribed later) |
 
 ### Noise / hallucination pruning (faster-whisper only)
 

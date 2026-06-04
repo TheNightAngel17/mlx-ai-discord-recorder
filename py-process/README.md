@@ -246,8 +246,8 @@ Reconstructs the session timeline from the per-user utterance snippets into a si
 
 1. Walks each participant's sub-folder and reads every snippet's start offset from its filename (skips `_`/`.`-prefixed entries)
 2. Rebuilds one full-length track per user by placing each snippet at its offset on a silent canvas (a user's own utterances never overlap), then overlays all user tracks — preserving silence where someone wasn't talking and overlap where people talked over each other
-3. Exports `_session_mix.wav` and `_session_mix.mp3`
-4. Optionally deletes the snippet WAVs and their now-empty sub-folders (controlled by `keep_wav` in `config.yaml`)
+3. Exports `_session_mix.mp3` (always) and `_session_mix.wav` (only when `keep_mix_wav: true`)
+4. Optionally deletes the snippet WAVs and their now-empty sub-folders (controlled by `keep_wav` in `config.yaml`), and removes any user sub-folder left empty (e.g. by live empty-snippet pruning)
 
 #### Usage
 
@@ -277,6 +277,7 @@ python merge_audio.py 20260330_143000_Campaign1_Session4
 |-----|---------|-------------|
 | `mp3_bitrate` | `"128k"` | MP3 bitrate (e.g. `"64k"`, `"128k"`, `"192k"`, `"320k"`) |
 | `keep_wav` | `true` | Keep the per-user snippet WAVs (and sub-folders) after the mix is exported |
+| `keep_mix_wav` | `false` | Keep the uncompressed `_session_mix.wav` next to the MP3. It's large and nothing downstream reads it; the MP3 is always exported |
 
 ---
 
@@ -491,6 +492,7 @@ All configuration is in the root `config.yaml`. The fields relevant to `py-proce
 | `whisper_language` | `"en"` | Default language (set to `"auto"` for auto-detection) |
 | `mp3_bitrate` | `"128k"` | MP3 compression bitrate |
 | `keep_wav` | `true` | Keep original WAV files after MP3 export |
+| `keep_mix_wav` | `false` | Keep the uncompressed `_session_mix.wav` (MP3 is always exported) |
 | `vector_db_directory` | `./vectordb` | ChromaDB persistence directory |
 | `embedding_provider` | `ollama` | Embedding backend: `ollama`, `openai`, or `voyage` |
 | `embedding_model` | `nomic-embed-text` | Embedding model name |
@@ -533,8 +535,8 @@ recordings/
     ├── thenightangel17.txt              # Per-user Whisper transcript
     ├── playerone.txt
     ├── _combined_transcript.txt         # All users merged chronologically
-    ├── _session_mix.wav                 # Combined WAV (snippets placed at their offsets, all users mixed)
-    ├── _session_mix.mp3                 # Compressed combined audio
+    ├── _session_mix.wav                 # Combined WAV (only when keep_mix_wav: true)
+    ├── _session_mix.mp3                 # Compressed combined audio (always exported)
     └── _session_summary.md              # Markdown summary (format set by the session's category prompt)
 ```
 

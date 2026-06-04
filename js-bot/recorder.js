@@ -139,6 +139,19 @@ class Recorder {
     this._transcribeMinMs =
       config.transcribe_min_ms != null ? Number(config.transcribe_min_ms) : 400;
 
+    // Do-not-record list. `ignore_bots` (default true) skips every Discord bot —
+    // music bots are the common culprit for wasted disk. `do_not_record` is an
+    // explicit blacklist of user IDs (preferred — stable) and/or usernames
+    // (case-insensitive) to skip on top of that. Skipped speakers never get a
+    // sub-folder, a WAV, or a transcription enqueue.
+    this._ignoreBots = config.ignore_bots !== false;
+    const blacklist = Array.isArray(config.do_not_record) ? config.do_not_record : [];
+    this._doNotRecord = new Set(blacklist.map(String));
+    this._doNotRecordLower = new Set(blacklist.map((v) => String(v).toLowerCase()));
+    // Cached per-userId record/skip decision (bot status is stable for a session
+    // and `speaking start` fires often, so we decide once per user).
+    this._recordDecisions = new Map();
+
     this.isRecording = false;
     /** @type {import('@discordjs/voice').VoiceConnection|null} */
     this.connection = null;
@@ -266,6 +279,7 @@ class Recorder {
     this.sessionDir = sessionDir;
     this.startTime = new Date();
     this.users = new Map();
+    this._recordDecisions = new Map();
 
     // Persist session-level metadata so the Python pipeline can map snippet
     // offsets back to absolute wall-clock time if needed.
@@ -324,6 +338,7 @@ class Recorder {
     const receiver = connection.receiver;
     receiver.speaking.on("start", (userId) => {
       if (!this.isRecording) return;
+      if (!this._shouldRecordUser(userId, voiceChannel.guild)) return;
       const entry = this._ensureUser(userId, voiceChannel.guild);
       this._startUtterance(userId, entry);
     });
@@ -551,6 +566,43 @@ class Recorder {
   // -------------------------------------------------------------------------
   // Internal helpers
   // -------------------------------------------------------------------------
+
+  /**
+   * Decide (and cache) whether a speaker should be recorded.
+   *
+   * Skips Discord bots when `ignore_bots` is on (music bots are the usual disk
+   * hog) and any user whose ID or username is in the `do_not_record` blacklist.
+   * Bot detection relies on the member being in the cache (true for someone
+   * actively speaking in the channel); the explicit ID list is the reliable
+   * fallback when a member can't be resolved.
+   *
+   * @param {string} userId
+   * @param {import('discord.js').Guild} guild
+   * @returns {boolean} true to record this user, false to skip them
+   */
+  _shouldRecordUser(userId, guild) {
+    if (this._recordDecisions.has(userId)) {
+      return this._recordDecisions.get(userId);
+    }
+
+    const member = guild.members.cache.get(userId);
+    const username = member ? member.user.username : null;
+
+    let allowed = true;
+    if (this._ignoreBots && member?.user?.bot) {
+      allowed = false;
+    } else if (this._doNotRecord.has(userId)) {
+      allowed = false;
+    } else if (username && this._doNotRecordLower.has(username.toLowerCase())) {
+      allowed = false;
+    }
+
+    this._recordDecisions.set(userId, allowed);
+    if (!allowed) {
+      this.logger.info(`Skipping ${username || userId} (do-not-record).`);
+    }
+    return allowed;
+  }
 
   /**
    * Ensure a per-participant tracking entry (and sub-folder) exists for a user.
