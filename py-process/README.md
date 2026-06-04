@@ -58,8 +58,8 @@ This pipeline processes those recordings through four stages:
 
 1. **Transcribe** — assemble per-user `.txt` files + merged `_combined_transcript.txt` from each snippet. With `auto_transcribe` on, snippets were already transcribed live by [py-transcribe](../py-transcribe/README.md) (sidecars on disk); this step just drains the queue and assembles. Otherwise it batch-transcribes with Whisper.
 2. **Merge Audio** — Place snippets at their offsets and overlay all users → `_session_mix.wav` + `_session_mix.mp3`
-3. **Vectorize** — Chunk and embed the combined transcript → ChromaDB for RAG queries
-4. **Summarize** — LLM-generated structured summary → `_session_summary.json` + `_session_summary.md` (and ChromaDB chunks)
+3. **Vectorize** — Chunk and embed the combined transcript → the session's category ChromaDB collection for RAG queries
+4. **Summarize** — LLM-generated Markdown summary (format driven by the session's category prompt) → `_session_summary.md` (and a ChromaDB summary chunk)
 
 ---
 
@@ -330,13 +330,12 @@ python vectorize.py 20260330_143000_Campaign1_Session4 --force
 
 ### `summarize.py` — Session Summarization
 
-Reads `_combined_transcript.txt` for a session, sends it to the configured chat LLM, and generates a structured summary with key moments, NPCs, locations, and items.
+Reads `_combined_transcript.txt` for a session, looks up the session's **category** (from `_session.metadata.json`), loads that category's summary prompt (`categories/<name>.md`), and sends the transcript to the configured chat LLM. The category prompt fully controls the output, which the model returns as finished Markdown.
 
-Outputs are written to the session folder:
-- `_session_summary.json` — Structured JSON (narrative, key moments, entities)
-- `_session_summary.md` — Human-readable markdown (posted to the Discord announce channel)
+Output is written to the session folder:
+- `_session_summary.md` — The model's Markdown summary (posted to the Discord announce channel)
 
-The summary narrative and each key moment are also stored as ChromaDB chunks with `type=summary` / `type=key_moment` metadata, improving cross-session RAG query quality.
+The summary text is also stored as a single ChromaDB chunk (`type=summary`) in the category's collection, improving cross-session RAG query quality. Sessions with no category in their metadata fall back to the built-in `dnd` category.
 
 #### Prerequisites
 
@@ -364,17 +363,12 @@ python summarize.py 20260330_143000_Campaign1_Session4
 
 ```
 Session: 20260330_143000_Campaign1_Session4
+  Category: dnd (collection: dnd_sessions)
   Transcript: 42381 chars, 3 speaker(s)
-  Sending transcript to ollama (llama3.2)…
-  Written: _session_summary.json
+  Sending transcript to ollama (llama3.2) (single pass)… done (8.4s)
   Written: _session_summary.md
-  Embedding narrative summary… done (1.2s)
-  Embedding key moment 1/5… done (0.8s)
-  Embedding key moment 2/5… done (0.9s)
-  Embedding key moment 3/5… done (0.7s)
-  Embedding key moment 4/5… done (0.8s)
-  Embedding key moment 5/5… done (0.9s)
-  Stored 6 summary chunk(s) in ChromaDB collection 'dnd_sessions'.
+  Embedding summary… done (1.2s)
+  Stored summary in ChromaDB collection 'dnd_sessions'.
 ```
 
 #### Key Moment Categories
@@ -444,6 +438,7 @@ python vectordb_helper.py --clear-all
 
 ```
 Vector DB : D:/mlx-ai-vectordb
+Category: dnd
 Collection: dnd_sessions
 
 Total chunks in DB: 5
@@ -530,8 +525,7 @@ recordings/
     ├── _combined_transcript.txt         # All users merged chronologically
     ├── _session_mix.wav                 # Combined WAV (snippets placed at their offsets, all users mixed)
     ├── _session_mix.mp3                 # Compressed combined audio
-    ├── _session_summary.json            # Structured summary (narrative, key moments, entities)
-    └── _session_summary.md              # Human-readable markdown summary
+    └── _session_summary.md              # Markdown summary (format set by the session's category prompt)
 ```
 
 Vector embeddings are stored separately in `vector_db_directory` (default: `./vectordb`).

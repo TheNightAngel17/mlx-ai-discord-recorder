@@ -75,6 +75,18 @@ examples:
         help="Restrict the search to a specific session folder name.",
     )
     parser.add_argument(
+        "--category",
+        default=None,
+        metavar="NAME",
+        help="Category to search (selects the collection). Defaults to 'dnd'.",
+    )
+    parser.add_argument(
+        "--subcategory",
+        default=None,
+        metavar="NAME",
+        help="Restrict the search to a specific sub-category within the category.",
+    )
+    parser.add_argument(
         "--top-k",
         type=int,
         default=5,
@@ -98,6 +110,9 @@ examples:
 
     print(f"Embedding : {embedding_provider} / {embedding_model}")
     print(f"Chat      : {chat_provider} / {chat_model}")
+    print(f"Category  : {args.category or 'dnd'}")
+    if args.subcategory:
+        print(f"Sub-cat   : {args.subcategory}")
     if args.session:
         print(f"Session   : {args.session}")
     print(f"Top-k     : {args.top_k}")
@@ -109,6 +124,8 @@ examples:
         config=config,
         session_filter=args.session,
         top_k=args.top_k,
+        category=args.category,
+        subcategory=args.subcategory,
     )
 
     # --- Timing summary ---

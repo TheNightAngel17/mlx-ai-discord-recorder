@@ -23,4 +23,7 @@ COPY --from=build /app/js-bot/node_modules ./node_modules
 COPY js-bot/ ./
 # Default config baked in; compose bind-mounts deploy/config.docker.yaml over it.
 COPY config.yaml /app/config.yaml
+# Built-in categories baked in; compose bind-mounts ./categories over it (rw) so the
+# bot's /mlx-ai category writes persist back to the host.
+COPY categories/ /app/categories/
 CMD ["node", "bot.js"]

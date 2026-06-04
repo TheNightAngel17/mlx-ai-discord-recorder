@@ -14,6 +14,16 @@
 output_directory: /data/recordings
 vector_db_directory: /data/vectordb
 
+# --- ChromaDB server (dedicated container that owns the HNSW vector index) ---
+# py-process and py-query use HttpClient to talk to this service rather than
+# opening PersistentClient directly, which avoids the stale-HNSW bug when
+# multiple containers share the same on-disk data volume.
+chroma_server_host: chromadb
+chroma_server_port: 8000
+# Session categories store — bind-mounted from ./categories at /app/categories in every
+# service (rw for the bot so /mlx-ai category writes persist back to the host).
+categories_directory: /app/categories
+
 # --- Recording / announcements ---
 announce_channel: "bot-commands"
 mp3_bitrate: "128k"

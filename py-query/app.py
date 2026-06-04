@@ -20,7 +20,6 @@ import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-import chromadb
 import yaml
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
@@ -28,7 +27,9 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from providers import get_chat_provider, get_embedding_provider
-from rag import COLLECTION_NAME, query_rag
+from categories import resolve_category
+from chroma_client import get_chroma_client
+from rag import query_rag
 
 logging.basicConfig(
     level=logging.INFO,
@@ -92,41 +93,29 @@ async def lifespan(app: FastAPI):
             "Query endpoint will return 503 until this is fixed."
         )
 
-    # Open ChromaDB
+    # Probe ChromaDB at startup. In Docker the client is an HttpClient pointing at the
+    # dedicated chromadb server container; locally it is a PersistentClient. Either way
+    # we open a fresh client per request (via get_chroma_client) so queries always
+    # reflect the latest writes, regardless of which container wrote them.
     app.state.chroma_ready = False
-    app.state.chroma_client = None
-    app.state.chroma_collection = None
-
-    db_path = Path(config.get("vector_db_directory", "./vectordb"))
-    if not db_path.exists():
+    try:
+        probe = get_chroma_client(config)
+        names = [c.name for c in probe.list_collections()]
+        app.state.chroma_ready = True
+        logger.info("ChromaDB ready: %d collection(s) %s", len(names), names)
+    except Exception as exc:
         logger.warning(
-            "Vector DB directory not found: %s — run py-process/vectorize.py first", db_path
+            "ChromaDB not reachable at startup: %s — will retry on first request", exc
         )
-    else:
-        try:
-            client = chromadb.PersistentClient(path=str(db_path))
-            existing = [c.name for c in client.list_collections()]
-            if COLLECTION_NAME not in existing:
-                logger.warning(
-                    "ChromaDB collection '%s' not found — run py-process/vectorize.py first",
-                    COLLECTION_NAME,
-                )
-            else:
-                collection = client.get_collection(COLLECTION_NAME)
-                app.state.chroma_client = client
-                app.state.chroma_collection = collection
-                app.state.chroma_ready = True
-                logger.info("ChromaDB ready: %d chunks indexed", collection.count())
-        except Exception as exc:
-            logger.error("Failed to open ChromaDB: %s", exc)
 
     yield
-    # No explicit cleanup needed — chromadb.PersistentClient manages its own connection
+    # No explicit cleanup needed
 
 
 # ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
+
 
 app = FastAPI(
     title="MLX AI RAG Query API",
@@ -149,6 +138,12 @@ class QueryRequest(BaseModel):
     question: str = Field(..., min_length=1, description="The question to ask")
     session: str | None = Field(
         None, description="Restrict the search to a specific session folder name"
+    )
+    category: str | None = Field(
+        None, description="Category to search (selects the collection); defaults to 'dnd'"
+    )
+    subcategory: str | None = Field(
+        None, description="Restrict the search to a specific sub-category within the category"
     )
     top_k: int = Field(5, ge=1, le=20, description="Number of transcript chunks to retrieve")
     show_sources: bool = Field(
@@ -193,8 +188,9 @@ async def query_endpoint(request: QueryRequest):
     """
     Run a RAG query and return the LLM answer with optional source citations.
 
-    The embedding provider, chat provider, and ChromaDB collection are all
-    pre-initialised at startup so there is no cold-start overhead.
+    The embedding and chat providers are pre-initialised at startup. A fresh
+    ChromaDB client is opened per request so the HNSW vector index always
+    reflects sessions indexed after this service started.
     """
     if not app.state.providers_ready:
         raise HTTPException(
@@ -214,8 +210,10 @@ async def query_endpoint(request: QueryRequest):
         )
 
     logger.info(
-        "RAG query: question=%r  session=%s  top_k=%d",
+        "RAG query: question=%r  category=%s  subcategory=%s  session=%s  top_k=%d",
         request.question,
+        request.category or "dnd",
+        request.subcategory or "all",
         request.session or "all",
         request.top_k,
     )
@@ -228,7 +226,9 @@ async def query_endpoint(request: QueryRequest):
             top_k=request.top_k,
             embedding_provider=app.state.embedding_provider,
             chat_provider=app.state.chat_provider,
-            chroma_client=app.state.chroma_client,
+            chroma_client=get_chroma_client(app.state.config),
+            category=request.category,
+            subcategory=request.subcategory,
         )
     except SystemExit:
         raise HTTPException(
@@ -254,12 +254,12 @@ async def query_endpoint(request: QueryRequest):
 
 
 @app.get("/api/sessions")
-async def list_sessions():
+async def list_sessions(category: str | None = None):
     """
-    List all indexed session names from ChromaDB.
+    List all indexed session names for a category (defaults to 'dnd').
 
-    Returns a sorted list of unique session folder names that have been
-    vectorized and are available for querying.
+    Returns a sorted list of unique session folder names that have been vectorized into
+    that category's collection and are available for querying.
     """
     if not app.state.chroma_ready:
         return JSONResponse(
@@ -274,14 +274,28 @@ async def list_sessions():
             },
         )
 
-    results = app.state.chroma_collection.get(include=["metadatas"])
+    meta = resolve_category(app.state.config, category)
+    collection_name = meta["collection_name"]
+    try:
+        collection = get_chroma_client(app.state.config).get_collection(collection_name)
+    except Exception:
+        return {
+            "sessions": [],
+            "count": 0,
+            "category": meta["category_name"],
+            "collection": collection_name,
+        }
+
+    results = collection.get(include=["metadatas"])
     sessions = sorted(
-        set(
-            meta.get("session_name", "unknown")
-            for meta in results["metadatas"]
-        )
+        set(m.get("session_name", "unknown") for m in results["metadatas"])
     )
-    return {"sessions": sessions, "count": len(sessions)}
+    return {
+        "sessions": sessions,
+        "count": len(sessions),
+        "category": meta["category_name"],
+        "collection": collection_name,
+    }
 
 
 @app.get("/api/health")
@@ -294,9 +308,13 @@ async def health():
     """
     config = app.state.config
     chunk_count = 0
-    if app.state.chroma_ready and app.state.chroma_collection is not None:
+    collections: list[str] = []
+    if app.state.chroma_ready:
         try:
-            chunk_count = app.state.chroma_collection.count()
+            client = get_chroma_client(app.state.config)
+            for c in client.list_collections():
+                collections.append(c.name)
+                chunk_count += client.get_collection(c.name).count()
         except Exception:
             pass
 
@@ -304,6 +322,7 @@ async def health():
         "status": "ok",
         "providers_ready": app.state.providers_ready,
         "chroma_ready": app.state.chroma_ready,
+        "chroma_collections": collections,
         "chroma_chunks": chunk_count,
         "embedding_provider": config.get("embedding_provider", "ollama"),
         "embedding_model": config.get("embedding_model", "nomic-embed-text"),

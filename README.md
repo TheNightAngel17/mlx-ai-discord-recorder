@@ -32,8 +32,9 @@ A Discord bot that records voice channel audio, transcribes it with [OpenAI Whis
 - 📝 **Whisper transcription** — per-user and combined transcripts with timestamps
 - ⚡ **Live transcription (optional)** — a warm-model Whisper service transcribes each utterance as it's recorded, so the transcript is ready almost instantly when the session ends
 - 🧠 **Vector embeddings** — chunk and embed transcripts into ChromaDB
-- 📋 **Automatic session summaries** — LLM-generated narrative summaries with key moments, NPCs, and locations posted to Discord
-- 🔍 **RAG query** — ask natural-language questions about your sessions via Discord or CLI
+- 📋 **Automatic session summaries** — LLM-generated Markdown summaries posted to Discord, with the format driven by an editable per-category prompt
+- 🗂️ **Session categories** — define session "styles" (D&D, work meeting, event planning, …) with their own summary prompt and ChromaDB collection, plus optional sub-categories (e.g. Campaign1/Company2) for grouping. Managed with `/mlx-ai category` and selected when starting a session
+- 🔍 **RAG query** — ask natural-language questions about your sessions via Discord or CLI, optionally scoped to a category/sub-category
 - 🔌 **Multi-provider LLM support** — Ollama (local), OpenAI, Anthropic, and Voyage AI (embeddings)
 
 ---
@@ -325,8 +326,9 @@ node bot.js
 
 Then use Discord slash commands:
 
-1. `/mlx-ai session` — Open the interactive session control panel: set a name, select a voice channel, start/stop recording, choose a Whisper model, and run post-processing — all from one place
-2. `/mlx-ai ask question:What happened when the party entered the cave?` — Ask a natural-language question about any recorded session
+1. `/mlx-ai session` — Open the interactive session control panel: pick a category and sub-category, set a name, select a voice channel, start/stop recording, choose a Whisper model, and run post-processing — all from one place
+2. `/mlx-ai ask question:What happened when the party entered the cave?` — Ask a natural-language question about any recorded session (optionally `category:` / `subcategory:` to scope it)
+3. `/mlx-ai category add|edit|delete|list` — Manage session categories. `add`/`edit` open a modal for the display name, ChromaDB collection name, and the summary prompt (the built-in `dnd` category cannot be deleted)
 
 ---
 
@@ -426,6 +428,9 @@ mlx-ai-discord-recorder/
 │       ├── updateChangelog.prompt.md
 │       └── updateReadme.prompt.md
 ├── config.yaml               # User-editable non-secret settings (bare-metal)
+├── categories/               # Session categories: <name>.json (meta) + <name>.md (summary prompt)
+│   ├── dnd.json              # Built-in D&D category (collection: dnd_sessions)
+│   └── dnd.md                # Built-in D&D summary prompt
 ├── CHANGELOG.md              # Project changelog
 ├── README.md                 # This file
 ├── DOCKER.md                 # Docker / Compose guide (volumes, GPU, k3s notes)
@@ -440,6 +445,8 @@ mlx-ai-discord-recorder/
 │   ├── postProcessor.js      # Triggers the py-process job service over HTTP
 │   ├── queryHandler.js       # Calls the py-query API for RAG queries
 │   ├── sessionPanel.js       # Interactive /mlx-ai session control panel
+│   ├── categories.js         # Category store loader (read/write categories/)
+│   ├── categoriesPanel.js    # /mlx-ai category add|edit|delete|list handlers
 │   ├── package.json          # Node.js dependencies
 │   ├── Dockerfile            # Lean Node image
 │   └── README.md             # JS bot documentation
@@ -449,8 +456,8 @@ mlx-ai-discord-recorder/
 │   ├── process.py            # Orchestrator — runs transcribe → merge → vectorize → summarize
 │   ├── transcribe.py         # Assemble transcripts from sidecars (Whisper fallback)
 │   ├── merge_audio.py        # Mix per-user snippets → combined WAV + MP3
-│   ├── vectorize.py          # Chunk + embed transcripts → ChromaDB
-│   ├── summarize.py          # LLM session summaries → _session_summary.json/.md + ChromaDB
+│   ├── vectorize.py          # Chunk + embed transcripts → per-category ChromaDB collection
+│   ├── summarize.py          # LLM session summaries (per-category prompt) → _session_summary.md + ChromaDB
 │   ├── vectordb_helper.py    # CLI tool to inspect/search/manage the vector DB
 │   ├── requirements.txt      # Python dependencies
 │   ├── Dockerfile            # Lean image (no torch/whisper)
@@ -467,6 +474,7 @@ mlx-ai-discord-recorder/
     ├── app.py                # FastAPI always-on API server (POST /api/query, GET /api/sessions, GET /api/health)
     ├── query.py              # CLI entry point for one-off RAG queries
     ├── rag.py                # Core RAG logic (embed → retrieve → generate)
+    ├── categories.py         # Category store loader (shared by py-process + py-query)
     ├── providers.py          # LLM provider abstraction (Ollama, OpenAI, Anthropic)
     ├── requirements.txt      # Python dependencies
     ├── Dockerfile            # CPU image

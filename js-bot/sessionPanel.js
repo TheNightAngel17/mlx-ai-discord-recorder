@@ -32,6 +32,13 @@ const {
   TextInputStyle,
 } = require("discord.js");
 
+const categories = require("./categories");
+
+/** Sub-category select option value that triggers the "type a new one" modal. */
+const NEW_SUBCATEGORY = "__new__";
+/** Max sub-categories listed in the dropdown (leaving room for the "➕ New…" entry). */
+const MAX_SUBCATEGORY_OPTIONS = 24;
+
 // Panel status constants
 const STATUS = {
   IDLE: "idle",           // Panel just opened, nothing configured yet
@@ -129,7 +136,10 @@ class SessionPanel {
    * @returns {{ embed: EmbedBuilder, rows: ActionRowBuilder[] }}
    */
   _buildPanel(panelId, state) {
-    const { channelId, channelName, sessionName, sessionFolderName, status, log, whisperModel, generateSummary } = state;
+    const { channelId, channelName, sessionName, sessionFolderName, status, log, whisperModel, generateSummary, category, subcategory } = state;
+
+    const catMeta = category ? categories.loadCategory(this.config, category) : null;
+    const categoryLabel = catMeta ? catMeta.display_name : category || "_not set_";
 
     const embed = new EmbedBuilder()
       .setTitle("🎙️ Session Control Panel")
@@ -143,6 +153,11 @@ class SessionPanel {
         {
           name: "Voice Channel",
           value: channelName ? `\`#${channelName}\`` : "_not selected_",
+          inline: true,
+        },
+        {
+          name: "Category",
+          value: `\`${categoryLabel}\`${subcategory ? ` › \`${subcategory}\`` : ""}`,
           inline: true,
         },
         {
@@ -161,35 +176,45 @@ class SessionPanel {
     const rows = [];
 
     if (status === STATUS.IDLE || status === STATUS.READY) {
-      // Reusable channel dropdown (shown in IDLE and READY)
-      const channelRow = new ActionRowBuilder().addComponents(
-        new ChannelSelectMenuBuilder()
-          .setCustomId(`panel_channel:${panelId}`)
-          .setPlaceholder(channelName ? `Voice channel: #${channelName}` : "Select a voice channel…")
-          .addChannelTypes(ChannelType.GuildVoice, ChannelType.GuildStageVoice)
+      // Row 1: category dropdown (the session "style" — owns the summary prompt + collection)
+      rows.push(
+        new ActionRowBuilder().addComponents(this._buildCategorySelect(panelId, category))
       );
 
-      // Edit button — green when no name set yet (draws attention), grey once a name is set
-      const editRow = new ActionRowBuilder().addComponents(
+      // Row 2: sub-category dropdown (grouping tag — existing ones + "➕ New…")
+      rows.push(
+        new ActionRowBuilder().addComponents(
+          this._buildSubcategorySelect(panelId, category, subcategory)
+        )
+      );
+
+      // Row 3: voice channel dropdown
+      rows.push(
+        new ActionRowBuilder().addComponents(
+          new ChannelSelectMenuBuilder()
+            .setCustomId(`panel_channel:${panelId}`)
+            .setPlaceholder(channelName ? `Voice channel: #${channelName}` : "Select a voice channel…")
+            .addChannelTypes(ChannelType.GuildVoice, ChannelType.GuildStageVoice)
+        )
+      );
+
+      // Row 4: Edit (+ Start Recording in READY) — merged into one button row to stay
+      // under Discord's 5-action-row limit.
+      const buttonRow = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId(`panel_set_name:${panelId}`)
           .setLabel("✏️ Edit Session Details")
           .setStyle(sessionName ? ButtonStyle.Secondary : ButtonStyle.Success)
       );
-
-      rows.push(channelRow);
-      rows.push(editRow);
-
       if (status === STATUS.READY) {
-        rows.push(
-          new ActionRowBuilder().addComponents(
-            new ButtonBuilder()
-              .setCustomId(`panel_record:${panelId}`)
-              .setLabel("⏺ Start Recording")
-              .setStyle(ButtonStyle.Success)
-          )
+        buttonRow.addComponents(
+          new ButtonBuilder()
+            .setCustomId(`panel_record:${panelId}`)
+            .setLabel("⏺ Start Recording")
+            .setStyle(ButtonStyle.Success)
         );
       }
+      rows.push(buttonRow);
     } else if (status === STATUS.RECORDING) {
       rows.push(
         new ActionRowBuilder().addComponents(
@@ -252,6 +277,73 @@ class SessionPanel {
     // DONE: no components — clean embed only
 
     return { embed, rows };
+  }
+
+  /**
+   * Build the category select menu (the session "style" — owns the summary prompt + collection).
+   *
+   * @param {string} panelId
+   * @param {string|null} current  Currently selected category_name
+   * @returns {StringSelectMenuBuilder}
+   */
+  _buildCategorySelect(panelId, current) {
+    const defined = categories.listCategories(this.config);
+    const list =
+      defined.length > 0
+        ? defined
+        : [{ category_name: categories.DEFAULT_CATEGORY, display_name: "D&D Session" }];
+
+    const options = list.slice(0, 25).map((c) => ({
+      label: (c.display_name || c.category_name).slice(0, 100),
+      value: c.category_name,
+      default: c.category_name === current,
+    }));
+
+    const currentMeta = list.find((c) => c.category_name === current);
+    return new StringSelectMenuBuilder()
+      .setCustomId(`panel_category:${panelId}`)
+      .setPlaceholder(
+        currentMeta ? `Category: ${currentMeta.display_name}` : "Select a session category…"
+      )
+      .addOptions(options);
+  }
+
+  /**
+   * Build the sub-category select menu: existing sub-categories used under the chosen
+   * category, plus a "➕ New…" entry that opens a modal.
+   *
+   * @param {string} panelId
+   * @param {string|null} category
+   * @param {string|null} current
+   * @returns {StringSelectMenuBuilder}
+   */
+  _buildSubcategorySelect(panelId, category, current) {
+    const used = this._usedSubcategories(category).slice(0, MAX_SUBCATEGORY_OPTIONS);
+    // Show the current selection even if it was just typed and isn't on disk yet.
+    if (current && !used.includes(current)) used.unshift(current);
+
+    const options = used.map((s) => ({
+      label: s.slice(0, 100),
+      value: s.slice(0, 100),
+      default: s === current,
+    }));
+    options.push({ label: "➕ New sub-category…", value: NEW_SUBCATEGORY });
+
+    return new StringSelectMenuBuilder()
+      .setCustomId(`panel_subcategory:${panelId}`)
+      .setPlaceholder(current ? `Sub-category: ${current}` : "Sub-category (optional)…")
+      .addOptions(options.slice(0, 25));
+  }
+
+  /**
+   * Collect distinct sub-categories already used under a category (shared with the
+   * /mlx-ai ask autocomplete in bot.js).
+   *
+   * @param {string|null} category
+   * @returns {string[]}  Sorted unique sub-category labels
+   */
+  _usedSubcategories(category) {
+    return categories.usedSubcategories(this.config, category);
   }
 
   /**
@@ -332,6 +424,8 @@ class SessionPanel {
       channelName: null,
       sessionName: null,
       sessionFolderName: null,
+      category: categories.DEFAULT_CATEGORY,
+      subcategory: null,
       whisperModel: this.config.whisper_model || "base",
       generateSummary: this.config.auto_summarize !== false,
       status: STATUS.IDLE,
@@ -509,7 +603,14 @@ class SessionPanel {
     );
 
     try {
-      await this.recorder.start(fakeInteraction, channel, state.sessionName, true);
+      await this.recorder.start(
+        fakeInteraction,
+        channel,
+        state.sessionName,
+        true,
+        state.category,
+        state.subcategory
+      );
 
       if (this.recorder.isRecording) {
         // Capture the full timestamped folder name that recorder created.
@@ -722,6 +823,98 @@ class SessionPanel {
     }
 
     state.generateSummary = !state.generateSummary;
+    const { embed, rows } = this._buildPanel(panelId, state);
+    await interaction.update({ embeds: [embed], components: rows });
+  }
+
+  /**
+   * Category select menu updated (IDLE/READY). Sets the category and resets the
+   * sub-category, since sub-categories are scoped to their parent category.
+   *
+   * @param {import('discord.js').StringSelectMenuInteraction} interaction
+   */
+  async handleCategorySelect(interaction) {
+    const panelId = interaction.customId.slice("panel_category:".length);
+    const state = this.panels.get(panelId);
+    if (!state) {
+      await interaction.reply({
+        content: "⚠️ This panel has expired. Run `/mlx-ai session` to open a new one.",
+        ephemeral: true,
+      });
+      return;
+    }
+
+    state.category = interaction.values[0];
+    state.subcategory = null;
+    this._log(state, `Category set to \`${state.category}\`.`);
+
+    const { embed, rows } = this._buildPanel(panelId, state);
+    await interaction.update({ embeds: [embed], components: rows });
+  }
+
+  /**
+   * Sub-category select menu updated. Selecting "➕ New…" opens a modal; any other value
+   * becomes the sub-category directly.
+   *
+   * @param {import('discord.js').StringSelectMenuInteraction} interaction
+   */
+  async handleSubcategorySelect(interaction) {
+    const panelId = interaction.customId.slice("panel_subcategory:".length);
+    const state = this.panels.get(panelId);
+    if (!state) {
+      await interaction.reply({
+        content: "⚠️ This panel has expired. Run `/mlx-ai session` to open a new one.",
+        ephemeral: true,
+      });
+      return;
+    }
+
+    const value = interaction.values[0];
+    if (value === NEW_SUBCATEGORY) {
+      const input = new TextInputBuilder()
+        .setCustomId("subcategory_input")
+        .setLabel("New sub-category")
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder("e.g. Campaign1")
+        .setRequired(true)
+        .setMaxLength(80);
+      if (state.subcategory) input.setValue(state.subcategory);
+
+      const modal = new ModalBuilder()
+        .setCustomId(`panel_subcategory_new:${panelId}`)
+        .setTitle("New sub-category")
+        .addComponents(new ActionRowBuilder().addComponents(input));
+
+      await interaction.showModal(modal);
+      return;
+    }
+
+    state.subcategory = value;
+    const { embed, rows } = this._buildPanel(panelId, state);
+    await interaction.update({ embeds: [embed], components: rows });
+  }
+
+  /**
+   * "New sub-category" modal submitted — store the typed label on the panel state.
+   *
+   * @param {import('discord.js').ModalSubmitInteraction} interaction
+   */
+  async handleSubcategoryNewModal(interaction) {
+    const panelId = interaction.customId.slice("panel_subcategory_new:".length);
+    const state = this.panels.get(panelId);
+    if (!state) {
+      await interaction.reply({
+        content: "⚠️ This panel has expired. Run `/mlx-ai session` to open a new one.",
+        ephemeral: true,
+      });
+      return;
+    }
+
+    const raw = interaction.fields.getTextInputValue("subcategory_input");
+    const sub = raw.replace(/\s+/g, " ").trim().slice(0, 80);
+    state.subcategory = sub || null;
+    if (sub) this._log(state, `Sub-category set to \`${sub}\`.`);
+
     const { embed, rows } = this._buildPanel(panelId, state);
     await interaction.update({ embeds: [embed], components: rows });
   }

@@ -26,12 +26,15 @@ const {
   Routes,
   SlashCommandBuilder,
   SlashCommandSubcommandBuilder,
+  SlashCommandSubcommandGroupBuilder,
   StringSelectMenuBuilder,
 } = require("discord.js");
 const { Recorder } = require("./recorder");
 const { PostProcessor } = require("./postProcessor");
 const { QueryHandler } = require("./queryHandler");
 const { SessionPanel } = require("./sessionPanel");
+const { CategoriesPanel } = require("./categoriesPanel");
+const categories = require("./categories");
 
 // ---------------------------------------------------------------------------
 // Logging helper — matches Python bot format: YYYY-MM-DD HH:MM:SS [LEVEL] module: message
@@ -107,6 +110,20 @@ const commands = [
         )
         .addStringOption((opt) =>
           opt
+            .setName("category")
+            .setDescription("Category to search — selects the collection (default: dnd)")
+            .setRequired(false)
+            .setAutocomplete(true)
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName("subcategory")
+            .setDescription("Restrict results to a sub-category within the category (optional)")
+            .setRequired(false)
+            .setAutocomplete(true)
+        )
+        .addStringOption((opt) =>
+          opt
             .setName("session")
             .setDescription(
               "Restrict results to a specific session folder name (optional)"
@@ -126,6 +143,49 @@ const commands = [
             .setName("show_sources")
             .setDescription("Include the retrieved source chunks in the reply (default: false)")
             .setRequired(false)
+        )
+    )
+    .addSubcommandGroup(
+      new SlashCommandSubcommandGroupBuilder()
+        .setName("category")
+        .setDescription("Manage session categories (D&D, meeting, event planning, …)")
+        .addSubcommand(
+          new SlashCommandSubcommandBuilder()
+            .setName("add")
+            .setDescription("Define a new session category")
+            .addStringOption((opt) =>
+              opt
+                .setName("name")
+                .setDescription("Short id/slug for the category (e.g. meeting)")
+                .setRequired(true)
+            )
+        )
+        .addSubcommand(
+          new SlashCommandSubcommandBuilder()
+            .setName("edit")
+            .setDescription("Edit an existing session category")
+            .addStringOption((opt) =>
+              opt
+                .setName("name")
+                .setDescription("The category id/slug to edit")
+                .setRequired(true)
+            )
+        )
+        .addSubcommand(
+          new SlashCommandSubcommandBuilder()
+            .setName("delete")
+            .setDescription("Delete a session category")
+            .addStringOption((opt) =>
+              opt
+                .setName("name")
+                .setDescription("The category id/slug to delete")
+                .setRequired(true)
+            )
+        )
+        .addSubcommand(
+          new SlashCommandSubcommandBuilder()
+            .setName("list")
+            .setDescription("List all defined session categories")
         )
     )
     .toJSON(),
@@ -148,6 +208,7 @@ const recorder = new Recorder(config, makeLogger("recorder"));
 const postProcessor = new PostProcessor(config, makeLogger("postProcessor"));
 const queryHandler = new QueryHandler(config, makeLogger("queryHandler"));
 const sessionPanel = new SessionPanel(recorder, postProcessor, config, makeLogger("sessionPanel"));
+const categoriesPanel = new CategoriesPanel(config, makeLogger("categoriesPanel"));
 
 // ---------------------------------------------------------------------------
 // Register guild commands on startup
@@ -176,6 +237,11 @@ client.on("interactionCreate", async (interaction) => {
   const group = interaction.options.getSubcommandGroup(false);
   const sub = interaction.options.getSubcommand(false);
 
+  if (group === "category") {
+    await categoriesPanel.handleCommand(interaction);
+    return;
+  }
+
   if (group === null && sub === "session") {
     await sessionPanel.open(interaction);
     return;
@@ -184,9 +250,68 @@ client.on("interactionCreate", async (interaction) => {
   if (group === null && sub === "ask") {
     const question = interaction.options.getString("question");
     const sessionFilter = interaction.options.getString("session") ?? null;
+    const category = interaction.options.getString("category") ?? null;
+    const subcategory = interaction.options.getString("subcategory") ?? null;
     const topK = interaction.options.getInteger("top_k") ?? 5;
     const showSources = interaction.options.getBoolean("show_sources") ?? false;
-    await queryHandler.query(interaction, question, sessionFilter, topK, showSources);
+    await queryHandler.query(
+      interaction,
+      question,
+      sessionFilter,
+      topK,
+      showSources,
+      category,
+      subcategory
+    );
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Autocomplete for /mlx-ai ask — category + subcategory options
+// ---------------------------------------------------------------------------
+client.on("interactionCreate", async (interaction) => {
+  if (!interaction.isAutocomplete()) return;
+  if (interaction.commandName !== "mlx-ai") return;
+
+  const focused = interaction.options.getFocused(true); // { name, value }
+  const query = (focused.value || "").toLowerCase();
+
+  try {
+    if (focused.name === "category") {
+      const choices = categories
+        .listCategories(config)
+        .filter(
+          (c) =>
+            c.display_name.toLowerCase().includes(query) ||
+            c.category_name.toLowerCase().includes(query)
+        )
+        .slice(0, 25)
+        .map((c) => ({ name: `${c.display_name} (${c.category_name})`, value: c.category_name }));
+      await interaction.respond(choices);
+      return;
+    }
+
+    if (focused.name === "subcategory") {
+      // Sub-categories are scoped to the chosen category (slug-normalized).
+      const catInput = interaction.options.getString("category");
+      const catSlug = catInput ? categories.sanitizeSlug(catInput) : categories.DEFAULT_CATEGORY;
+      const choices = categories
+        .usedSubcategories(config, catSlug)
+        .filter((s) => s.toLowerCase().includes(query))
+        .slice(0, 25)
+        .map((s) => ({ name: s, value: s }));
+      await interaction.respond(choices);
+      return;
+    }
+
+    await interaction.respond([]);
+  } catch (err) {
+    logger.warn(`Autocomplete failed for ${focused.name}: ${err.message}`);
+    try {
+      await interaction.respond([]);
+    } catch {
+      /* interaction already expired — ignore */
+    }
   }
 });
 
@@ -194,6 +319,51 @@ client.on("interactionCreate", async (interaction) => {
 // Button + select menu routing for post-processing
 // ---------------------------------------------------------------------------
 client.on("interactionCreate", async (interaction) => {
+  // ── Category management — add/edit modal submit ───────────────────────────
+  if (
+    interaction.isModalSubmit() &&
+    interaction.customId.startsWith("category_modal:")
+  ) {
+    await categoriesPanel.handleModalSubmit(interaction);
+    return;
+  }
+
+  // ── Category management — delete confirm button ───────────────────────────
+  if (
+    interaction.isButton() &&
+    interaction.customId.startsWith("category_delete_confirm:")
+  ) {
+    await categoriesPanel.handleDeleteConfirm(interaction);
+    return;
+  }
+
+  // ── Session panel — category select ───────────────────────────────────────
+  if (
+    interaction.isStringSelectMenu() &&
+    interaction.customId.startsWith("panel_category:")
+  ) {
+    await sessionPanel.handleCategorySelect(interaction);
+    return;
+  }
+
+  // ── Session panel — sub-category select ───────────────────────────────────
+  if (
+    interaction.isStringSelectMenu() &&
+    interaction.customId.startsWith("panel_subcategory:")
+  ) {
+    await sessionPanel.handleSubcategorySelect(interaction);
+    return;
+  }
+
+  // ── Session panel — new sub-category modal submit ─────────────────────────
+  if (
+    interaction.isModalSubmit() &&
+    interaction.customId.startsWith("panel_subcategory_new:")
+  ) {
+    await sessionPanel.handleSubcategoryNewModal(interaction);
+    return;
+  }
+
   // ── Session panel — channel select ────────────────────────────────────────
   if (
     interaction.isChannelSelectMenu() &&

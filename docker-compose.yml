@@ -17,7 +17,36 @@ x-config-mount: &config-mount
   target: /app/config.yaml
   read_only: true
 
+# Session categories store. Host-authoritative bind mount (read-write) so the bot's
+# /mlx-ai category writes persist, and py-process/py-query read the same definitions.
+x-categories-mount: &categories-mount
+  type: bind
+  source: ./categories
+  target: /app/categories
+
 services:
+  # Dedicated ChromaDB server — the single authoritative owner of the vector index.
+  # py-process writes embeddings via HttpClient; py-query reads via HttpClient.
+  # This avoids the stale-HNSW bug that occurs when multiple PersistentClient
+  # instances in separate containers share the same on-disk data volume.
+  chromadb:
+    image: chromadb/chroma:latest
+    restart: unless-stopped
+    environment:
+      IS_PERSISTENT: "TRUE"
+      ANONYMIZED_TELEMETRY: "FALSE"
+    volumes:
+      - vectordb:/data      # chromadb/chroma:latest saves to /data by default
+    ports:
+      - "127.0.0.1:8000:8000"   # optional host access (debugging)
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/localhost/8000"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks: [mlx]
+
   bot:
     build:
       context: .
@@ -27,6 +56,7 @@ services:
     env_file: ./.env
     volumes:
       - { <<: *config-mount }
+      - { <<: *categories-mount }
       - recordings:/data/recordings
     depends_on:
       py-process:
@@ -45,8 +75,11 @@ services:
     env_file: ./.env
     volumes:
       - { <<: *config-mount }
+      - { <<: *categories-mount }
       - recordings:/data/recordings
-      - vectordb:/data/vectordb
+    depends_on:
+      chromadb:
+        condition: service_healthy
     ports:
       - "127.0.0.1:8300:8300"   # optional host access (debugging)
     healthcheck:
@@ -66,7 +99,10 @@ services:
     env_file: ./.env
     volumes:
       - { <<: *config-mount }
-      - vectordb:/data/vectordb
+      - { <<: *categories-mount }
+    depends_on:
+      chromadb:
+        condition: service_healthy
     ports:
       - "127.0.0.1:8100:8100"
     healthcheck:

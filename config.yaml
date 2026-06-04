@@ -88,6 +88,14 @@ process_api_url: http://localhost:8300
 vector_db_directory: D:/mlx-ai-vectordb   # Where ChromaDB persists data
 chunk_minutes: 3                           # Time-window size for chunking transcripts (minutes)
 
+# Session categories
+# Each category is a session "style" (D&D, work meeting, event planning, …) defined by a
+# pair of files in this directory: <category_name>.json (display_name + collection_name) and
+# <category_name>.md (the summary prompt). Manage them with /mlx-ai category add|edit|delete|list.
+# A relative path is resolved against the directory containing this config.yaml (the repo root).
+# The built-in "dnd" category reproduces the original D&D behaviour (collection: dnd_sessions).
+categories_directory: ./categories
+
 # LLM Provider settings
 # Supported embedding providers: ollama | openai | voyage
 # Supported chat providers:      ollama | openai | anthropic

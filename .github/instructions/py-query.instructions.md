@@ -35,7 +35,7 @@ applyTo: "py-query/**"
 
 ## Architecture Decisions (do not change without discussion)
 
-- **Single ChromaDB collection** (`dnd_sessions`). All sessions share one collection with metadata filtering — not one collection per session.
+- **One ChromaDB collection per category.** A query resolves its collection from the requested `category` (default `dnd`) via `categories.py` (`resolve_category` → `collection_name`); within a collection, `session_name`/`subcategory` metadata filter results. Do not hardcode collection names.
 - **No vendor SDKs.** Raw `requests` only. Keeps the dependency surface minimal and auditable.
 - **`subprocess.run()` with list arguments only.** Never `shell=True`.
 

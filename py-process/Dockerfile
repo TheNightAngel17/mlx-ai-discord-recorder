@@ -30,6 +30,8 @@ RUN pip install --no-cache-dir \
 COPY py-process/ ./
 COPY py-query/ /app/py-query/
 COPY config.yaml /app/config.yaml
+# Built-in categories baked in; compose bind-mounts ./categories over it at runtime.
+COPY categories/ /app/categories/
 
 EXPOSE 8300
 CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8300"]

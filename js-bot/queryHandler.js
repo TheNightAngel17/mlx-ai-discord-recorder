@@ -31,8 +31,10 @@ class QueryHandler {
    * @param {string|null} sessionFilter Session name to restrict results to, or null for all
    * @param {number}      topK          Number of context chunks to retrieve
    * @param {boolean}     showSources   Whether to include source citations in the reply
+   * @param {string|null} [category]    Category to search (selects the collection); null = dnd
+   * @param {string|null} [subcategory] Sub-category to restrict results to, or null for all
    */
-  async query(interaction, question, sessionFilter, topK, showSources) {
+  async query(interaction, question, sessionFilter, topK, showSources, category = null, subcategory = null) {
     // Defer immediately — LLM calls can take several seconds
     await interaction.deferReply();
 
@@ -48,9 +50,15 @@ class QueryHandler {
     if (sessionFilter) {
       body.session = sessionFilter;
     }
+    if (category) {
+      body.category = category;
+    }
+    if (subcategory) {
+      body.subcategory = subcategory;
+    }
 
     this.logger.info(
-      `RAG query started: question="${question}", session=${sessionFilter || "all"}, top_k=${topK}, show_sources=${showSources}`
+      `RAG query started: question="${question}", category=${category || "dnd"}, subcategory=${subcategory || "all"}, session=${sessionFilter || "all"}, top_k=${topK}, show_sources=${showSources}`
     );
 
     try {
