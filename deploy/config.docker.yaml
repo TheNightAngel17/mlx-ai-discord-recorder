@@ -43,8 +43,17 @@ transcribe_api_port: 8200
 transcribe_provider: faster-whisper
 transcribe_model: distil-large-v3
 transcribe_device: cuda
-transcribe_compute_type: int8_float16
+transcribe_compute_type: float16
 transcribe_min_ms: 400
+# Noise / hallucination pruning (faster-whisper only) — see config.yaml for details.
+transcribe_vad_filter: true
+transcribe_vad_min_silence_ms: 500
+transcribe_condition_on_previous_text: false
+transcribe_no_speech_threshold: 0.6
+transcribe_log_prob_threshold: -1.0
+transcribe_compression_ratio_threshold: 2.4
+transcribe_hallucination_silence_threshold: 2.0
+transcribe_max_no_speech_prob: 0.8
 transcribe_api_url: http://py-transcribe:8200
 
 # --- Post-processing job service (py-process) ---

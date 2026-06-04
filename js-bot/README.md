@@ -71,7 +71,7 @@ The bot logs to stdout with timestamps. On first startup it registers slash comm
 
 ## Slash Command Reference
 
-All commands are registered under the `/mlx-ai` root command. There are two top-level subcommands.
+All commands are registered under the `/mlx-ai` root command: the `session`, `ask`, and `re-post-process` subcommands, plus the `category` management group.
 
 ---
 
@@ -132,6 +132,29 @@ Ask a natural-language question about recorded and vectorized sessions. Spawns `
 
 ---
 
+### `/mlx-ai re-post-process` — Re-run the Pipeline on an Existing Session
+
+Re-runs the **full** post-processing pipeline (transcribe → merge → vectorize → summarize) on a session you already recorded — handy after editing a category prompt, switching the summary/embedding model, or recovering a session whose transcript came out wrong. Pick the session from an autocompleted list of your recorded folders.
+
+Because the session is already in the vector DB, this always **re-indexes** it (vectorize.py would otherwise skip it). Whisper model, language, and the summary toggle come from `config.yaml` (`whisper_model`, `whisper_language`, `auto_summarize`).
+
+Setting `re_transcribe:true` rebuilds the transcript **from the audio**: it clears the per-snippet `<offset_ms>.json` sidecars and re-transcribes via the warm-model [py-transcribe](../py-transcribe/README.md) service (or the local Whisper batch fallback if that service isn't running). Leave it `false` to keep the existing transcription and just re-merge / re-index / re-summarize.
+
+**Discord examples:**
+```
+/mlx-ai re-post-process session:20260330_143000_Campaign1_Session4
+/mlx-ai re-post-process session:20260330_143000_Campaign1_Session4 re_transcribe:true
+```
+
+| Parameter | Required | Default | Description |
+|-----------|----------|---------|-------------|
+| `session` | ✅ | — | Session folder to re-process (autocompleted, newest first) |
+| `re_transcribe` | ❌ | `false` | Also rebuild the transcript from audio (clears sidecars and re-transcribes) |
+
+> **Note:** `re_transcribe:true` needs the original snippet WAVs. If `keep_wav` is `false` they were deleted after the first merge, so only a transcript-preserving re-run is possible.
+
+---
+
 ## Behaviour & Automation
 
 - **Per-user utterance snippets** — Each user's speech is saved as discrete snippet WAVs in a per-user sub-folder: `<output_directory>/<YYYYMMDD_HHMMSS>_<session_name>/<username>/<offset_ms>.wav`. The filename is the snippet's session-relative start offset in milliseconds, so files sort chronologically and carry their own timing
@@ -157,6 +180,8 @@ The bot posts status messages to the channel configured as `announce_channel` in
 | Auto-stop (empty channel) | `Recording automatically stopped (channel empty). Files saved to \`recordings/...\`` |
 | Post-processing starts | `Post-processing started for session \`...\` (model: base, language: en, 42 snippet(s))` |
 | Post-processing complete | `✅ Post-processing complete for session \`...\` — files saved to \`...\`` |
+| Re-post-processing starts | `Re-post-processing started for session \`...\` (model: base, language: en)` |
+| Re-post-processing complete | `✅ Re-post-processing complete for session \`...\` — files saved to \`...\`` |
 
 ---
 
@@ -202,6 +227,6 @@ recordings/
 |------|-------------|
 | `bot.js` | **Entry point.** Loads config/env, creates the Discord client, registers slash commands as guild commands on startup, and routes all interactions (`/mlx-ai` subcommands, buttons, select menus, and modals) to the appropriate handler. |
 | `recorder.js` | **Voice recording logic.** Manages the voice connection lifecycle: joining channels and, each time a user starts talking, opening a per-utterance Opus subscription (`EndBehaviorType.AfterSilence`) that decodes to PCM via prism-media and writes a timestamped snippet WAV into the user's sub-folder when the utterance ends. When `auto_transcribe` is on, also enqueues each finished snippet to the [py-transcribe](../py-transcribe/README.md) service. Handles auto-stop and mid-session join detection. |
-| `postProcessor.js` | **Python script spawner.** Spawns `py-process/process.py`, `merge_audio.py`, and `vectorize.py` as child processes. Tracks running state for each operation independently and reports results back to Discord. |
+| `postProcessor.js` | **Post-processing trigger.** POSTs jobs to the always-on `py-process/app.py` job runner (transcribe → merge → vectorize → summarize), polls them for progress, and reports results back to Discord. Handles the `/mlx-ai session` **⚙️ Post-Process** button and the `/mlx-ai re-post-process` re-run (with optional re-transcription and forced re-indexing). Tracks running state so only one job runs at a time. |
 | `queryHandler.js` | **RAG query handler.** Calls the `py-query/app.py` HTTP API via `fetch()`. Formats the JSON response into a Discord reply with the answer, timings, and optional source citations. |
 | `sessionPanel.js` | **Interactive session control panel.** Manages the ephemeral `/mlx-ai session` panel: panel state machine (idle → ready → recording → stopping → stopped → processing → done), embed builder, and handlers for the channel select menu, session name modal, Whisper model selector, and record/stop/post-process buttons. Posts a public completion embed when post-processing finishes. |

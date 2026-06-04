@@ -9,6 +9,7 @@
  * Exports a PostProcessor class with:
  *   postProcess(interaction, sessionName, model, language, silent, generateSummary)
  *   postProcessFromButton(interaction, sessionName, model, language, generateSummary)
+ *   rePostProcess(interaction, sessionName, model, language, retranscribe, generateSummary)
  *   mergeAudio(interaction, sessionName)
  *   vectorize(interaction, sessionName, force)
  *   status / mergeAudioStatus / vectorizeStatus
@@ -373,6 +374,135 @@ class PostProcessor {
       this.logger.error(`Could not run post-processing for ${sessionName}: ${err.message}`);
       await startMsg.edit({
         content: `❌ Could not run post-processing: ${err.message}\n${this._serviceHint()}`,
+      });
+    } finally {
+      this.isProcessing = false;
+      this.currentSession = null;
+    }
+  }
+
+  /**
+   * Re-run the full post-processing pipeline on an already-processed session,
+   * triggered by the `/mlx-ai re-post-process` slash command.
+   *
+   * Differs from {@link postProcess} in two ways the re-run needs:
+   *   - `force_vectorize` is always set, so vectorize.py re-indexes the session
+   *     instead of skipping it (it is already in the vector DB).
+   *   - `retranscribe` (optional) clears the per-snippet sidecars and rebuilds the
+   *     transcript from audio rather than reusing the previous transcription.
+   *
+   * @param {import('discord.js').ChatInputCommandInteraction} interaction
+   * @param {string} sessionName
+   * @param {string} model
+   * @param {string|null} language
+   * @param {boolean} [retranscribe=false]   Rebuild the transcript from audio
+   * @param {boolean} [generateSummary=true]  Regenerate the session summary
+   */
+  async rePostProcess(interaction, sessionName, model, language, retranscribe = false, generateSummary = true) {
+    if (this.isProcessing) {
+      await interaction.reply({
+        content: `⚠️ Post-processing is already in progress for session \`${this.currentSession}\`. Please wait for it to finish.`,
+        ephemeral: true,
+      });
+      return;
+    }
+
+    const outputDir = this.config.output_directory || "./recordings";
+    const sessionDir = path.resolve(outputDir, sessionName);
+
+    if (!fs.existsSync(sessionDir)) {
+      await interaction.reply({
+        content: `❌ Session directory not found: \`${sessionName}\``,
+        ephemeral: true,
+      });
+      return;
+    }
+
+    // Re-transcription needs the original snippet WAVs; if keep_wav was off they
+    // were deleted after the first merge. Re-processing without re-transcription
+    // only needs the existing combined transcript.
+    const snippetCount = countSnippetWavs(sessionDir);
+    const hasTranscript = fs.existsSync(path.join(sessionDir, "_combined_transcript.txt"));
+    if (retranscribe && snippetCount === 0) {
+      await interaction.reply({
+        content: `❌ Cannot re-transcribe \`${sessionName}\` — no snippet WAVs found (they may have been removed if \`keep_wav\` is off).`,
+        ephemeral: true,
+      });
+      return;
+    }
+    if (!retranscribe && snippetCount === 0 && !hasTranscript) {
+      await interaction.reply({
+        content: `❌ Nothing to re-process in \`${sessionName}\` — no snippet WAVs and no \`_combined_transcript.txt\`.`,
+        ephemeral: true,
+      });
+      return;
+    }
+
+    await interaction.deferReply();
+
+    this.isProcessing = true;
+    this.currentSession = sessionName;
+    const actionLabel = retranscribe ? "Re-post-processing (re-transcribing)" : "Re-post-processing";
+    this.logger.info(
+      `${actionLabel} started: session=${sessionName}, model=${model}, language=${language || "auto"}, retranscribe=${retranscribe}`
+    );
+
+    const announceChannel = await this._getAnnounceChannel(interaction.guild);
+    if (announceChannel) {
+      await announceChannel.send(
+        `${actionLabel} started for session \`${sessionName}\` (model: ${model}, language: ${language || "auto-detect"})`
+      );
+    }
+
+    try {
+      const jobId = await this._startJob("process", {
+        session: sessionName,
+        model,
+        language: language || null,
+        summarize: generateSummary,
+        retranscribe,
+        force_vectorize: true,
+      });
+
+      const job = await this._pollJob(jobId, async (j) => {
+        await interaction.editReply({ content: `⏳ ${actionLabel} \`${sessionName}\` — ${j.step}…` });
+      });
+
+      if (job.status === "done") {
+        this.logger.info(`${actionLabel} finished successfully for session ${sessionName}`);
+
+        const preview = this._readCombinedPreview(sessionDir);
+        const replyContent = [
+          `✅ ${actionLabel} complete for session \`${sessionName}\``,
+          `Files saved to \`${sessionDir}\``,
+        ];
+        if (preview) replyContent.push("", "```", preview, "```");
+        await interaction.editReply({ content: replyContent.join("\n") });
+
+        if (announceChannel) {
+          await announceChannel.send(
+            `✅ ${actionLabel} complete for session \`${sessionName}\` — files saved to \`${sessionDir}\``
+          );
+          const summaryPath = path.join(sessionDir, "_session_summary.md");
+          if (fs.existsSync(summaryPath)) {
+            await announceChannel.send({
+              files: [new AttachmentBuilder(summaryPath, { name: `${sessionName}_summary.md` })],
+            });
+          }
+        }
+      } else {
+        this.logger.error(`${actionLabel} failed for session ${sessionName}: ${this._jobErrorText(job)}`);
+        await interaction.editReply({
+          content: `❌ ${actionLabel} failed for session \`${sessionName}\`.\n\`\`\`\n${this._jobErrorText(job)}\n\`\`\``,
+        });
+        if (announceChannel) {
+          await announceChannel.send(`❌ ${actionLabel} failed for session \`${sessionName}\``);
+        }
+      }
+    } catch (err) {
+      this.logger.error(`Could not run re-post-processing for ${sessionName}: ${err.message}`);
+      await interaction.editReply({
+        content: `❌ Could not run re-post-processing: ${err.message}\n${this._serviceHint()}`,
       });
     } finally {
       this.isProcessing = false;

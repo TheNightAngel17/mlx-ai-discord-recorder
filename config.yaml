@@ -79,6 +79,29 @@ transcribe_compute_type: int8_float16
 # Snippets shorter than this many ms are treated as non-speech blips and skipped
 # (both live and in the batch fallback).
 transcribe_min_ms: 400
+#
+# --- Noise / hallucination pruning (faster-whisper only) ---
+# Large/distil models transcribe real speech well but hallucinate boilerplate
+# ("Thank you.", "I don't know.") on noise-only clips. These controls suppress
+# that without hurting real speech. All apply to the faster-whisper backend.
+#
+# Silero VAD strips non-speech *before* decoding — the biggest single lever, since
+# a noise-only snippet then has nothing left to hallucinate from.
+transcribe_vad_filter: true
+transcribe_vad_min_silence_ms: 500           # VAD min_silence_duration_ms; raise if it clips short real utterances
+# Don't let a hallucinated segment seed (condition) the next one.
+transcribe_condition_on_previous_text: false
+# faster-whisper's own silence/garbage gates (defaults shown). Raise
+# no_speech_threshold toward 0.8 to be stricter about calling a clip silence.
+transcribe_no_speech_threshold: 0.6
+transcribe_log_prob_threshold: -1.0
+transcribe_compression_ratio_threshold: 2.4
+# Skip suspicious silent gaps (seconds). Set to null to disable.
+transcribe_hallucination_silence_threshold: 2.0
+# Post-filter backstop: drop any segment whose no_speech_prob exceeds this.
+# 0.8 is conservative and rarely touches real speech; lower it (e.g. 0.6) for more
+# aggressive pruning. Set to null to disable.
+transcribe_max_no_speech_prob: 0.8
 # URL the bot and process.py use to REACH this service. Use localhost for
 # bare-metal; in Docker set it to the service name (e.g. http://py-transcribe:8200).
 transcribe_api_url: http://localhost:8200

@@ -139,9 +139,14 @@ python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}'); print(f'GP
 
 ### `process.py` — Full Pipeline Orchestrator
 
-Runs all four processing steps in order for a single session. This is the script the JS bot calls when you press **⚙️ Post-Process** in the `/mlx-ai session` control panel.
+Runs all four processing steps in order for a single session. This is the script the JS bot calls when you press **⚙️ Post-Process** in the `/mlx-ai session` control panel — and, with the re-run flags below, when you run `/mlx-ai re-post-process`.
 
 If any step fails, the pipeline halts immediately. Step 4 (summarize) is controlled by the **☑ Generate Summary** toggle in the session panel, which passes `--summarize` or `--no-summarize` to this script. You can also pass `--no-summarize` on the command line to skip it.
+
+**Re-processing an existing session.** Transcription is sidecar-driven (see [`transcribe.py`](#transcribepy--transcript-assembly-sidecar-aware)) and vectorization skips sessions already in the DB, so a plain re-run reuses the old transcript and won't re-index. Two flags make a true re-run possible:
+
+- `--retranscribe` — clear the per-snippet `<offset_ms>.json` sidecars and rebuild the transcript from audio. Re-transcription runs through the warm-model [py-transcribe](../py-transcribe/README.md) service (the lean Docker image of this service has no Whisper); if that service is unreachable, transcribe.py's local Whisper batch fallback handles it. Needs the original snippet WAVs (only present when `keep_wav: true`).
+- `--force-vectorize` — pass `--force` to `vectorize.py` so the already-indexed session is re-indexed instead of skipped.
 
 #### Usage
 
@@ -157,6 +162,9 @@ python process.py <session_name> --model large --language en
 
 # Skip summary generation
 python process.py <session_name> --no-summarize
+
+# Re-process an existing session: rebuild the transcript from audio and re-index
+python process.py <session_name> --retranscribe --force-vectorize
 ```
 
 #### Terminal Example
@@ -177,6 +185,8 @@ python process.py 20260330_143000_Campaign1_Session4 --model medium --language e
 | `--model` | ❌ | From `config.yaml` | Whisper model: `tiny`, `base`, `small`, `medium`, `large` |
 | `--language` | ❌ | From `config.yaml` | Language code (e.g. `en`). Omit for auto-detect. |
 | `--no-summarize` | ❌ | Summarize is on by default | Pass to skip Step 4 (session summary generation) |
+| `--retranscribe` | ❌ | off | Clear sidecars and rebuild the transcript from audio before assembling (needs the snippet WAVs) |
+| `--force-vectorize` | ❌ | off | Re-index a session already present in the vector DB (passes `--force` to `vectorize.py`) |
 
 ---
 
