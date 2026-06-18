@@ -14,9 +14,15 @@ announce_channel: "bot-commands"
 mp3_bitrate: "128k"     # MP3 bitrate for compression (e.g. "64k", "128k", "192k", "320k")
 keep_wav: true           # Keep the per-user snippet WAVs after the session mix is exported.
                          # Set false to delete snippets (and their sub-folders) once merge_audio.py finishes.
-# keep_mix_wav: keep the uncompressed _session_mix.wav next to the MP3. It's large
-#   (~160 MB per 23 min) and nothing downstream reads it — the MP3 is always exported.
+# keep_mix_mp3: export the compressed _session_mix.mp3 (the combined recording of
+#   all participants). On by default. Set false to skip the combined audio file
+#   entirely — nothing downstream reads it, so this is safe if you only want the
+#   per-user snippets and/or the transcript.
+keep_mix_mp3: true
+# keep_mix_wav: also keep the uncompressed _session_mix.wav next to the MP3. It's
+#   large (~160 MB per 23 min) and nothing downstream reads it.
 #   Leave false to save disk; set true if you want the lossless combined mix.
+#   (When both keep_mix_mp3 and keep_mix_wav are false, no combined file is made.)
 keep_mix_wav: false
 
 # Do-not-record: skip certain speakers entirely (no WAVs, no transcription).
@@ -122,6 +128,13 @@ transcribe_max_no_speech_prob: 0.8
 # above), delete its WAV + sidecar immediately to reclaim disk. This frees space
 # live during a session; the trade-off is those clips can't be re-transcribed later.
 prune_empty_snippets: true
+# delete_wav_after_transcribe: once py-transcribe writes a snippet's sidecar,
+#   delete its WAV (the transcript is kept). Reclaims disk live for installs that
+#   don't build the combined audio mix (keep_mix_mp3 / keep_mix_wav off). Trade-offs:
+#   the snippet can't be re-transcribed from audio later, and an emptied mix has
+#   no WAVs to merge. Applies only to the live service (auto_transcribe on); it
+#   overrides keep_wav for snippets it deletes. Leave false to keep WAVs until merge.
+delete_wav_after_transcribe: false
 # URL the bot and process.py use to REACH this service. Use localhost for
 # bare-metal; in Docker set it to the service name (e.g. http://py-transcribe:8200).
 transcribe_api_url: http://localhost:8200
@@ -229,8 +242,8 @@ summary_max_tokens: 2000
 #   Provider/Model                  | Context Window | Recommended setting
 #   --------------------------------|----------------|--------------------
 #   OpenAI GPT-4o / GPT-4o-mini    | 128K tokens    | 100000
-#   Anthropic Claude 3.5 Sonnet     | 200K tokens    | 150000
-#   Anthropic Claude 3 Opus         | 200K tokens    | 150000
+#   Anthropic Claude Sonnet 4.6     | 1M tokens      | 750000
+#   Anthropic Claude Opus 4.8       | 1M tokens      | 750000
 #   Ollama Llama 3.1 8B/70B         | 128K tokens    | 32000 (set PARAMETER num_ctx 32000 in Modelfile)
 #   Ollama Llama 3 8B               |   8K tokens    | 6000  (set PARAMETER num_ctx 6000 in Modelfile)
 #   Ollama Mixtral 8x7B             |  32K tokens    | 24000

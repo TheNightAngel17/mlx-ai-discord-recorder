@@ -203,7 +203,7 @@ recordings/
     ├── PlayerTwo.txt
     ├── _combined_transcript.txt         # All users merged chronologically
     ├── _session_mix.wav                 # Snippets placed at their offsets, all users mixed (only when keep_mix_wav: true)
-    └── _session_mix.mp3                 # Compressed combined audio (always exported)
+    └── _session_mix.mp3                 # Compressed combined audio (only when keep_mix_mp3: true, the default)
 ```
 
 ---

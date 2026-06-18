@@ -100,6 +100,21 @@ def delete_snippet(wav_path: Path) -> None:
             pass  # already gone or not present — nothing to reclaim
 
 
+def delete_wav(wav_path: Path) -> None:
+    """Delete a snippet WAV but keep its transcript sidecar (best-effort).
+
+    Used when `delete_wav_after_transcribe` is on: once the JSON sidecar is written
+    the WAV's only remaining consumer is the audio mix, so installs that don't keep
+    the combined recording can reclaim the (large) PCM immediately rather than
+    waiting for merge_audio.py. The trade-off is the snippet can no longer be
+    re-transcribed from audio. A missing file is fine.
+    """
+    try:
+        wav_path.unlink()
+    except OSError:
+        pass  # already gone — nothing to reclaim
+
+
 # ---------------------------------------------------------------------------
 # Worker — the single-consumer that guarantees one transcription at a time
 # ---------------------------------------------------------------------------
@@ -135,9 +150,12 @@ async def _worker(app: FastAPI) -> None:
                     )
                 else:
                     write_sidecar(wav_path, offset_ms, language, segments)
+                    if app.state.delete_wav_after_transcribe:
+                        delete_wav(wav_path)
                     logger.info(
-                        "Transcribed %s/%s (%d segments)",
+                        "Transcribed %s/%s (%d segments)%s",
                         session, wav_path.name, len(segments),
+                        " — WAV removed" if app.state.delete_wav_after_transcribe else "",
                     )
         except Exception as exc:  # never let one bad snippet stall the queue
             logger.error("Failed to transcribe %s: %s", wav_path, exc)
@@ -165,6 +183,13 @@ async def lifespan(app: FastAPI):
     # When on, snippets that transcribe to no speech have their WAV + sidecar
     # deleted immediately to reclaim disk (see delete_snippet / _worker).
     app.state.prune_empty = bool(config.get("prune_empty_snippets", False))
+    # When on, a snippet's WAV is deleted as soon as its sidecar is written (the
+    # transcript is kept). Reclaims disk live for installs that don't build the
+    # audio mix; precludes re-transcribing that snippet from audio later. Takes
+    # effect before merge, so it overrides keep_wav for transcribed snippets.
+    app.state.delete_wav_after_transcribe = bool(
+        config.get("delete_wav_after_transcribe", False)
+    )
 
     # Build the warm model once.
     app.state.provider = None

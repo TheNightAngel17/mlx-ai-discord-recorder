@@ -580,9 +580,15 @@ class PostProcessor {
       if (job.status === "done") {
         this.logger.info(`Audio merge finished for session ${sessionName}`);
         const mp3Path = path.join(sessionDir, "_session_mix.mp3");
-        await interaction.editReply({
-          content: [`✅ Audio merge complete for session \`${sessionName}\``, `Output: \`${mp3Path}\``].join("\n"),
-        });
+        // The combined MP3 is only written when keep_mix_mp3 is on; report the
+        // output path only if it actually exists.
+        const lines = [`✅ Audio merge complete for session \`${sessionName}\``];
+        lines.push(
+          fs.existsSync(mp3Path)
+            ? `Output: \`${mp3Path}\``
+            : "No combined audio file was written (`keep_mix_mp3` is off).",
+        );
+        await interaction.editReply({ content: lines.join("\n") });
       } else {
         this.logger.error(`Audio merge failed for session ${sessionName}: ${this._jobErrorText(job)}`);
         await interaction.editReply({
