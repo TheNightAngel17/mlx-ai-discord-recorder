@@ -233,7 +233,7 @@ auto_summarize: true
 # summary_max_tokens: approximate token budget for the LLM when generating session summaries.
 #   Controls how long the summary output is. Larger values produce more detailed summaries
 #   but require more context window capacity from the chat model.
-summary_max_tokens: 2000
+summary_max_tokens: 8192
 # summary_max_input_tokens: maximum input tokens per summarization chunk.
 #   Transcripts longer than (summary_max_input_tokens × 4) characters are automatically
 #   split and processed with map-reduce summarization.
@@ -251,4 +251,4 @@ summary_max_tokens: 2000
 #   Ollama Qwen2.5 7B/14B           | 128K tokens    | 32000
 #
 #   Rule of thumb: ~75% of your model's context window. 1 token ≈ 4 characters.
-summary_max_input_tokens: 32000
+summary_max_input_tokens: 750000

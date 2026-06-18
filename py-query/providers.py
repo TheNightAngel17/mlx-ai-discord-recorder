@@ -176,9 +176,10 @@ class VoyageAIEmbedding(EmbeddingProvider):
 class OllamaChat(ChatProvider):
     """Chat completions via a local Ollama instance."""
 
-    def __init__(self, model: str, base_url: str):
+    def __init__(self, model: str, base_url: str, max_tokens: int = 8192):
         self.model = model
         self.base_url = base_url.rstrip("/")
+        self.max_tokens = max_tokens
 
     def chat(self, system_prompt: str, user_message: str) -> str:
         url = f"{self.base_url}/api/chat"
@@ -189,6 +190,7 @@ class OllamaChat(ChatProvider):
                 {"role": "user", "content": user_message},
             ],
             "stream": False,
+            "options": {"num_predict": self.max_tokens},
         }
         try:
             resp = requests.post(url, json=payload, timeout=120)
@@ -222,13 +224,15 @@ class OpenAIChat(ChatProvider):
 
     _API_URL = "https://api.openai.com/v1/chat/completions"
 
-    def __init__(self, model: str, api_key: str):
+    def __init__(self, model: str, api_key: str, max_tokens: int = 8192):
         self.model = model
         self.api_key = api_key
+        self.max_tokens = max_tokens
 
     def chat(self, system_prompt: str, user_message: str) -> str:
         payload = {
             "model": self.model,
+            "max_tokens": self.max_tokens,
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_message},
@@ -272,14 +276,15 @@ class AnthropicChat(ChatProvider):
     _API_URL = "https://api.anthropic.com/v1/messages"
     _API_VERSION = "2023-06-01"
 
-    def __init__(self, model: str, api_key: str):
+    def __init__(self, model: str, api_key: str, max_tokens: int = 8192):
         self.model = model
         self.api_key = api_key
+        self.max_tokens = max_tokens
 
     def chat(self, system_prompt: str, user_message: str) -> str:
         payload = {
             "model": self.model,
-            "max_tokens": 4096,
+            "max_tokens": self.max_tokens,
             "system": system_prompt,
             "messages": [
                 {"role": "user", "content": user_message},
@@ -387,10 +392,11 @@ def get_chat_provider(config: dict) -> ChatProvider:
     """
     provider = config.get("chat_provider", "ollama").lower()
     model = config.get("chat_model", "llama3")
+    max_tokens = int(config.get("summary_max_tokens", 8192))
 
     if provider == "ollama":
         base_url = config.get("ollama_base_url", "http://localhost:11434")
-        return OllamaChat(model=model, base_url=base_url)
+        return OllamaChat(model=model, base_url=base_url, max_tokens=max_tokens)
 
     if provider == "openai":
         api_key = os.environ.get("OPENAI_API_KEY", "")
@@ -401,7 +407,7 @@ def get_chat_provider(config: dict) -> ChatProvider:
                 file=sys.stderr,
             )
             sys.exit(1)
-        return OpenAIChat(model=model, api_key=api_key)
+        return OpenAIChat(model=model, api_key=api_key, max_tokens=max_tokens)
 
     if provider == "anthropic":
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")
@@ -412,7 +418,7 @@ def get_chat_provider(config: dict) -> ChatProvider:
                 file=sys.stderr,
             )
             sys.exit(1)
-        return AnthropicChat(model=model, api_key=api_key)
+        return AnthropicChat(model=model, api_key=api_key, max_tokens=max_tokens)
 
     print(
         f"Error: Unknown chat_provider '{provider}'. "
