@@ -23,7 +23,6 @@ const {
   ButtonBuilder,
   ButtonStyle,
   ChannelType,
-  StringSelectMenuBuilder,
 } = require("discord.js");
 const prism = require("prism-media");
 
@@ -435,25 +434,12 @@ class Recorder {
     if (guild && !silent) {
       const announceChannel = await this._getAnnounceChannel(guild);
       if (announceChannel) {
-        const defaultModel = this.config.whisper_model || "base";
-
-        const modelSelectRow = new ActionRowBuilder().addComponents(
-          new StringSelectMenuBuilder()
-            .setCustomId(`post_process_model:${sessionName}`)
-            .setPlaceholder(`Model: ${defaultModel} (click to change)`)
-            .addOptions([
-              { label: "tiny",   description: "Fastest, lowest accuracy",  value: "tiny"   },
-              { label: "base",   description: "Fast, decent accuracy",      value: "base"   },
-              { label: "small",  description: "Balanced",                   value: "small"  },
-              { label: "medium", description: "Slower, higher accuracy",    value: "medium" },
-              { label: "large",  description: "Slowest, best accuracy",     value: "large"  },
-            ])
-        );
-
+        // Whisper model is config-only (whisper_model / transcribe_model in
+        // config.yaml) — no per-session picker, so the button doesn't need one.
         const startButtonRow = new ActionRowBuilder().addComponents(
           new ButtonBuilder()
-            .setCustomId(`post_process:${sessionName}:${defaultModel}`)
-            .setLabel(`▶ Start Processing (${defaultModel})`)
+            .setCustomId(`post_process:${sessionName}`)
+            .setLabel("▶ Start Processing")
             .setStyle(ButtonStyle.Primary)
         );
 
@@ -461,7 +447,7 @@ class Recorder {
           ? `Recording automatically stopped (channel empty). Files saved to \`${relPath}\``
           : `Recording stopped — files saved to \`${relPath}\``;
 
-        await announceChannel.send({ content, components: [modelSelectRow, startButtonRow] });
+        await announceChannel.send({ content, components: [startButtonRow] });
       }
     }
 
