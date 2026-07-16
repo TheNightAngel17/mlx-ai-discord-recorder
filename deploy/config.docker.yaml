@@ -77,7 +77,7 @@ embedding_model: voyage-3-large
 
 # Chat provider
 chat_provider: anthropic
-chat_model: claude-sonnet-4-6
+chat_model: claude-sonnet-5
 
 # Ollama (used only when a provider above is set to "ollama"). Points at the
 # optional `ollama` Compose service (enable with `--profile ollama`).
