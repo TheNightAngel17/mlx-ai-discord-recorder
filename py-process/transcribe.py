@@ -15,7 +15,10 @@ Two sources of per-snippet text are supported:
      (py-transcribe) already transcribed a snippet, a ``<offset_ms>.json``
      sidecar sits next to the WAV with session-relative segments. We load those
      directly — no Whisper needed. When *every* snippet has a sidecar, the
-     Whisper model is never loaded at all and assembly is near-instant.
+     Whisper model is never loaded at all and assembly is near-instant. With
+     ``delete_wav_after_transcribe`` on, the WAV is gone and only the sidecar
+     remains — assembly works from sidecars alone, so snippets are enumerated by
+     the union of WAV and sidecar filenames (see ``iter_snippets``).
 
   2. **Batch fallback.** Snippets without a sidecar are transcribed here with
      OpenAI Whisper (loaded once), then their clip-relative timestamps are
@@ -105,6 +108,21 @@ def wav_duration_ms(wav_path: Path) -> float:
         return 0.0
 
 
+def iter_snippets(user_dir: Path) -> list[Path]:
+    """Sorted snippet base paths (``<offset_ms>.wav``) in a participant folder.
+
+    A snippet may exist as a WAV, a JSON sidecar, or both — ``delete_wav_after_
+    transcribe`` leaves only the sidecar once a snippet is transcribed. We
+    therefore enumerate the union of WAV and sidecar stems and return one
+    ``.wav``-suffixed Path per snippet (the WAV may not exist; callers check
+    before reading it). Filenames are zero-padded offsets, so the stems sort
+    chronologically.
+    """
+    stems = {p.stem for p in user_dir.glob("*.wav")}
+    stems.update(p.stem for p in user_dir.glob("*.json"))
+    return [user_dir / f"{stem}.wav" for stem in sorted(stems)]
+
+
 def load_sidecar(wav_path: Path) -> dict | None:
     """Load a snippet's ``<offset_ms>.json`` sidecar if present.
 
@@ -147,7 +165,7 @@ def transcribe_user(
     segments: list[dict] = []
     detected_lang = "unknown"
 
-    for wav_path in sorted(user_dir.glob("*.wav")):
+    for wav_path in iter_snippets(user_dir):
         sidecar = load_sidecar(wav_path)
         if sidecar is not None:
             if sidecar["language"] and sidecar["language"] != "unknown":
@@ -155,6 +173,16 @@ def transcribe_user(
             segments.extend(sidecar["segments"])  # already session-relative
             continue
 
+        # No sidecar — the snippet must be batch-transcribed from its WAV. A
+        # sidecar-only snippet (WAV removed by delete_wav_after_transcribe) is
+        # always handled above, so reaching here normally means the WAV exists;
+        # guard anyway so a vanished file never aborts the run.
+        if not wav_path.exists():
+            print(
+                f"Warning: snippet {wav_path.name} has neither WAV nor sidecar; skipping.",
+                file=sys.stderr,
+            )
+            continue
         if wav_duration_ms(wav_path) < min_ms:
             continue  # sub-threshold blip, no sidecar — skip
         if model is None:
@@ -292,7 +320,7 @@ def main():
     results_by_user: dict[str, list[dict]] = {}
     for user_dir in user_dirs:
         username = user_dir.name
-        snippet_count = len(list(user_dir.glob("*.wav")))
+        snippet_count = len(iter_snippets(user_dir))
         if snippet_count == 0:
             print(f"Skipping {username} (no snippets).")
             continue

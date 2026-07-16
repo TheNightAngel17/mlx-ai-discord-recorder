@@ -64,6 +64,7 @@ The service reads the repo-root `config.yaml` and `.env` on startup.
 | `transcribe_compute_type` | `float16` | faster-whisper compute type (`int8` on CPU) |
 | `transcribe_min_ms` | `400` | Snippets shorter than this are skipped (likely noise) |
 | `prune_empty_snippets` | `false` | Delete a snippet's WAV + sidecar when it transcribes to no speech (frees disk; those clips can't be re-transcribed later) |
+| `delete_wav_after_transcribe` | `false` | Delete a snippet's WAV as soon as its sidecar is written, keeping the transcript (frees disk live; precludes re-transcribing and leaves no WAVs to merge — use with the mix disabled) |
 
 ### Noise / hallucination pruning (faster-whisper only)
 

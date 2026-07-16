@@ -28,7 +28,8 @@ categories_directory: /app/categories
 announce_channel: "bot-commands"
 mp3_bitrate: "128k"
 keep_wav: true
-keep_mix_wav: false     # keep the uncompressed _session_mix.wav (MP3 is always exported)
+keep_mix_mp3: false     # export the combined _session_mix.mp3 (false = skip the combined audio file)
+keep_mix_wav: false     # also keep the uncompressed _session_mix.wav alongside the MP3
 # Do-not-record: skip certain speakers entirely (no WAVs, no transcription).
 ignore_bots: true       # skip every Discord bot (e.g. music bots)
 do_not_record: []       # additionally skip specific users by ID (preferred) or username
@@ -59,6 +60,7 @@ transcribe_compression_ratio_threshold: 2.4
 transcribe_hallucination_silence_threshold: 2.0
 transcribe_max_no_speech_prob: 0.8
 prune_empty_snippets: true   # delete WAV+sidecar when a snippet transcribes to no speech
+delete_wav_after_transcribe: true   # delete each snippet WAV once its transcript sidecar is written (no mix kept; precludes re-transcribe)
 transcribe_api_url: http://py-transcribe:8200
 
 # --- Post-processing job service (py-process) ---
@@ -75,7 +77,7 @@ embedding_model: voyage-3-large
 
 # Chat provider
 chat_provider: anthropic
-chat_model: claude-sonnet-4-6
+chat_model: claude-sonnet-5
 
 # Ollama (used only when a provider above is set to "ollama"). Points at the
 # optional `ollama` Compose service (enable with `--profile ollama`).
@@ -88,5 +90,5 @@ query_api_url: http://py-query:8100
 
 # --- Session summaries ---
 auto_summarize: true
-summary_max_tokens: 2000
-summary_max_input_tokens: 32000
+summary_max_tokens: 8192
+summary_max_input_tokens: 750000

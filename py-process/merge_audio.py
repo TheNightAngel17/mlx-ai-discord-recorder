@@ -10,7 +10,12 @@ The filename is the snippet's session-relative start offset in milliseconds.
 This script rebuilds the session timeline by placing every snippet at its offset:
 for each user it copies the snippet PCM into a full-length silence buffer (a
 user's own utterances never overlap), then overlays the few per-user tracks into
-a single combined recording exported as both WAV and MP3.
+a single combined recording.
+
+Which combined files get written is controlled by two config flags: ``keep_mix_mp3``
+(the compressed mix, on by default) and ``keep_mix_wav`` (the large uncompressed
+mix, off by default). When both are off the costly reconstruction is skipped
+entirely and only snippet cleanup runs.
 
 Honours the ``keep_wav`` config flag: when false, snippet WAVs (and their now-
 empty sub-folders) are deleted after the mix is exported.
@@ -149,65 +154,73 @@ def main():
             users.append((user_dir.name, snips))
             total_snippets += len(snips)
 
-    if not users:
-        print(f"Error: No snippet .wav files found in {session_dir}", file=sys.stderr)
-        sys.exit(1)
-
     mp3_bitrate = config.get("mp3_bitrate", "128k")
     keep_wav = config.get("keep_wav", True)
     keep_mix_wav = config.get("keep_mix_wav", False)
+    keep_mix_mp3 = config.get("keep_mix_mp3", True)
 
     print(f"Session:  {args.session}")
     print(f"Path:     {session_dir}")
     print(f"Bitrate:  {mp3_bitrate}")
     print(f"Keep WAV: {keep_wav}")
     print(f"Keep mix WAV: {keep_mix_wav}")
+    print(f"Keep mix MP3: {keep_mix_mp3}")
     print(f"Users:    {len(users)} participant(s), {total_snippets} snippet(s)")
     print()
 
-    # Load every snippet, learn the audio format, and find the session length.
-    loaded: list[tuple[str, list[tuple[AudioSegment, int]]]] = []
-    total_ms = 0
-    frame_rate = sample_width = channels = None
-    for username, snips in users:
-        clips: list[tuple[AudioSegment, int]] = []
-        for wav_path, offset_ms in snips:
-            seg = AudioSegment.from_wav(str(wav_path))
-            clips.append((seg, offset_ms))
-            total_ms = max(total_ms, offset_ms + len(seg))
-            if frame_rate is None:
-                frame_rate, sample_width, channels = (
-                    seg.frame_rate,
-                    seg.sample_width,
-                    seg.channels,
-                )
-        loaded.append((username, clips))
-        print(f"Loaded {username}: {len(clips)} snippet(s)")
+    # Build the combined mix only when an output format is wanted AND there are
+    # snippet WAVs to mix. Missing WAVs is not an error: delete_wav_after_transcribe
+    # removes them live once each transcript sidecar is written, so an empty session
+    # here is expected — fall through to cleanup so the rest of the pipeline runs.
+    if not users:
+        print("No snippet .wav files found — nothing to mix.")
+    elif keep_mix_wav or keep_mix_mp3:
+        # Load every snippet, learn the audio format, and find the session length.
+        loaded: list[tuple[str, list[tuple[AudioSegment, int]]]] = []
+        total_ms = 0
+        frame_rate = sample_width = channels = None
+        for username, snips in users:
+            clips: list[tuple[AudioSegment, int]] = []
+            for wav_path, offset_ms in snips:
+                seg = AudioSegment.from_wav(str(wav_path))
+                clips.append((seg, offset_ms))
+                total_ms = max(total_ms, offset_ms + len(seg))
+                if frame_rate is None:
+                    frame_rate, sample_width, channels = (
+                        seg.frame_rate,
+                        seg.sample_width,
+                        seg.channels,
+                    )
+            loaded.append((username, clips))
+            print(f"Loaded {username}: {len(clips)} snippet(s)")
 
-    print()
+        print()
 
-    # Reconstruct one full-length track per user, then overlay them.
-    print(f"Reconstructing {len(loaded)} track(s) over {total_ms / 1000:.1f}s...", end=" ", flush=True)
-    user_tracks = [
-        build_user_track(clips, total_ms, frame_rate, sample_width, channels)
-        for _username, clips in loaded
-    ]
-    mix = mix_segments(user_tracks)
-    print(f"done ({len(mix) / 1000:.1f}s)")
+        # Reconstruct one full-length track per user, then overlay them.
+        print(f"Reconstructing {len(loaded)} track(s) over {total_ms / 1000:.1f}s...", end=" ", flush=True)
+        user_tracks = [
+            build_user_track(clips, total_ms, frame_rate, sample_width, channels)
+            for _username, clips in loaded
+        ]
+        mix = mix_segments(user_tracks)
+        print(f"done ({len(mix) / 1000:.1f}s)")
 
-    # Export combined WAV (optional — the uncompressed mix is large and nothing
-    # downstream reads it; the MP3 below is always produced).
-    if keep_mix_wav:
-        mix_wav_path = session_dir / "_session_mix.wav"
-        print(f"Exporting combined WAV -> {mix_wav_path.name}...", end=" ", flush=True)
-        mix.export(str(mix_wav_path), format="wav")
-        print("done")
+        # Export combined WAV (optional — the uncompressed mix is large and
+        # nothing downstream reads it).
+        if keep_mix_wav:
+            mix_wav_path = session_dir / "_session_mix.wav"
+            print(f"Exporting combined WAV -> {mix_wav_path.name}...", end=" ", flush=True)
+            mix.export(str(mix_wav_path), format="wav")
+            print("done")
 
-    # Export combined MP3
-    mix_mp3_path = session_dir / "_session_mix.mp3"
-    print(f"Exporting combined MP3 -> {mix_mp3_path.name}...", end=" ", flush=True)
-    export_mp3(mix, mix_mp3_path, mp3_bitrate)
-    print("done")
+        # Export combined MP3 (optional)
+        if keep_mix_mp3:
+            mix_mp3_path = session_dir / "_session_mix.mp3"
+            print(f"Exporting combined MP3 -> {mix_mp3_path.name}...", end=" ", flush=True)
+            export_mp3(mix, mix_mp3_path, mp3_bitrate)
+            print("done")
+    else:
+        print("Skipping combined mix export (keep_mix_wav and keep_mix_mp3 both off).")
 
     # Honour keep_wav: clean up snippet WAVs, their transcription sidecars, and
     # now-empty sub-folders when off. The combined transcript has already been

@@ -9,8 +9,10 @@
  *   handleRecordButton(interaction)    — "⏺ Start Recording" button pressed
  *   handleStopButton(interaction)      — "⏹ Stop Recording" button pressed
  *   handlePostProcessButton(interaction) — "⚙️ Post-Process" button pressed
- *   handleModelSelect(interaction)     — Whisper model dropdown changed (STOPPED state)
  *   handleSummaryToggle(interaction)   — "Generate Summary" toggle button pressed (STOPPED state)
+ *
+ * The Whisper model is config-only (whisper_model / transcribe_model in config.yaml) —
+ * there is no UI to change it per-session; the panel just displays it.
  */
 
 "use strict";
@@ -70,13 +72,13 @@ const COLORS = {
   [STATUS.DONE]:       0x57f287,
 };
 
-/** Human-readable status description */
+/** Human-readable status description. The Whisper model is config-only (no UI picker). */
 const STATUS_LABELS = {
   [STATUS.IDLE]:       "⚪ Set a session name and select a voice channel to begin.",
   [STATUS.READY]:      "🟡 Ready — press **⏺ Start Recording** to begin.",
   [STATUS.RECORDING]:  "🔴 Recording in progress…",
   [STATUS.STOPPING]:   "🟠 Stopping — saving WAV files…",
-  [STATUS.STOPPED]:    "🟢 Recording saved — select a Whisper model and press **⚙️ Post-Process**.",
+  [STATUS.STOPPED]:    "🟢 Recording saved — press **⚙️ Post-Process**.",
   [STATUS.PROCESSING]: "⏳ Post-processing in progress…",
   [STATUS.DONE]:       "✅ Post-processing complete.",
 };
@@ -129,6 +131,17 @@ class SessionPanel {
   }
 
   /**
+   * The Whisper model that will actually transcribe this session — always sourced
+   * from config.yaml (transcribe_model, falling back to whisper_model), never from
+   * a per-session UI choice.
+   *
+   * @returns {string}
+   */
+  _configModel() {
+    return this.config.transcribe_model || this.config.whisper_model || "base";
+  }
+
+  /**
    * Build the Discord embed and component rows for the current panel state.
    *
    * Layout varies by status (progressive disclosure):
@@ -136,8 +149,8 @@ class SessionPanel {
    *   READY               → channel dropdown  +  [✏️ Edit Session Details]  +  [⏺ Start Recording]
    *   RECORDING           → [⏹ Stop Recording]
    *   STOPPING            → [⏹ Stopping… (disabled)]
-   *   STOPPED             → model dropdown  +  [☑ Generate Summary toggle]  +  [⚙️ Post-Process] (green)
-   *   PROCESSING          → model dropdown (disabled)  +  [☑ Generate Summary (disabled)]  +  [⏳ Processing… (disabled)]
+   *   STOPPED             → [☑ Generate Summary toggle]  +  [⚙️ Post-Process] (green)
+   *   PROCESSING          → [☑ Generate Summary (disabled)]  +  [⏳ Processing… (disabled)]
    *   DONE                → (no components — clean embed only)
    *
    * @param {string} panelId
@@ -145,7 +158,7 @@ class SessionPanel {
    * @returns {{ embed: EmbedBuilder, rows: ActionRowBuilder[] }}
    */
   _buildPanel(panelId, state) {
-    const { channelId, channelName, sessionName, sessionFolderName, status, log, whisperModel, generateSummary, category, subcategory } = state;
+    const { channelId, channelName, sessionName, sessionFolderName, status, log, generateSummary, category, subcategory } = state;
 
     const catMeta = category ? categories.loadCategory(this.config, category) : null;
     const categoryLabel = catMeta ? catMeta.display_name : category || "_not set_";
@@ -168,12 +181,20 @@ class SessionPanel {
           name: "Category",
           value: `\`${categoryLabel}\`${subcategory ? ` › \`${subcategory}\`` : ""}`,
           inline: true,
-        },
-        {
-          name: "Status",
-          value: STATUS_LABELS[status] ?? "⚪ Unknown",
         }
       );
+
+    // Config-only, shown for information — never a per-session choice.
+    embed.addFields({
+      name: "Whisper Model",
+      value: `\`${this._configModel()}\``,
+      inline: true,
+    });
+
+    embed.addFields({
+      name: "Status",
+      value: STATUS_LABELS[status] ?? "⚪ Unknown",
+    });
 
     if (log.length > 0) {
       embed.addFields({
@@ -244,24 +265,7 @@ class SessionPanel {
         )
       );
     } else if (status === STATUS.STOPPED || status === STATUS.PROCESSING) {
-      const modelValue = whisperModel || this.config.whisper_model || "base";
       const modelLocked = status === STATUS.PROCESSING;
-
-      rows.push(
-        new ActionRowBuilder().addComponents(
-          new StringSelectMenuBuilder()
-            .setCustomId(`panel_model:${panelId}`)
-            .setPlaceholder(`Whisper model: ${modelValue}`)
-            .addOptions([
-              { label: "tiny",   description: "Fastest, lowest accuracy",  value: "tiny",   default: modelValue === "tiny"   },
-              { label: "base",   description: "Fast, decent accuracy",      value: "base",   default: modelValue === "base"   },
-              { label: "small",  description: "Balanced",                   value: "small",  default: modelValue === "small"  },
-              { label: "medium", description: "Slower, higher accuracy",    value: "medium", default: modelValue === "medium" },
-              { label: "large",  description: "Slowest, best accuracy",     value: "large",  default: modelValue === "large"  },
-            ])
-            .setDisabled(modelLocked)
-        )
-      );
 
       rows.push(
         new ActionRowBuilder().addComponents(
@@ -435,7 +439,6 @@ class SessionPanel {
       sessionFolderName: null,
       category: categories.DEFAULT_CATEGORY,
       subcategory: null,
-      whisperModel: this.config.whisper_model || "base",
       generateSummary: this.config.auto_summarize !== false,
       status: STATUS.IDLE,
       log: [],
@@ -723,7 +726,7 @@ class SessionPanel {
       return;
     }
 
-    const model = state.whisperModel || this.config.whisper_model || "base";
+    const model = this._configModel();
     const defaultLang =
       this.config.whisper_language === "auto"
         ? null
@@ -806,26 +809,6 @@ class SessionPanel {
     }
   }
 
-  /**
-   * Whisper model select menu updated (shown in the STOPPED state).
-   *
-   * @param {import('discord.js').StringSelectMenuInteraction} interaction
-   */
-  async handleModelSelect(interaction) {
-    const panelId = interaction.customId.slice("panel_model:".length);
-    const state = this.panels.get(panelId);
-    if (!state) {
-      await interaction.reply({
-        content: "⚠️ This panel has expired. Run `/mlx-ai session` to open a new one.",
-        ephemeral: true,
-      });
-      return;
-    }
-
-    state.whisperModel = interaction.values[0];
-    const { embed, rows } = this._buildPanel(panelId, state);
-    await interaction.update({ embeds: [embed], components: rows });
-  }
   /**
    * "Generate Summary" toggle button pressed (shown in the STOPPED state).
    *
